@@ -799,9 +799,9 @@ const BusNetwork: React.FC<BusNetworkProps> = ({
   useFrame(() => setCamDist(camera.position.length()));
 
   const [genTex, subTex, loadTex] = useLoader(THREE.TextureLoader, [
-    '/assets/icons/generator.png',
-    '/assets/icons/substation.png',
-    '/assets/icons/load.png'
+    `${import.meta.env.BASE_URL}assets/icons/generator.png`,
+    `${import.meta.env.BASE_URL}assets/icons/substation.png`,
+    `${import.meta.env.BASE_URL}assets/icons/load.png`
   ]);
 
   // Scaled icon size: ~60% of original, scaled by grid size so 118 buses is clean & readable
