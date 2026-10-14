@@ -1,0 +1,13 @@
+Split,Model,Accuracy,Precision,Recall,F1,F2 (Recall-Favored),ROC-AUC,PR-AUC,False Alarm Rate (FPR),Miss Rate (FNR),Operating Threshold,Best Params
+Contingency-Held-Out Split (Unseen Contingencies),GINE (Graph Neural Network),0.8758 +/- 0.0231,0.7570 +/- 0.0362,0.9730 +/- 0.0000,0.8510 +/- 0.0232,0.9201 +/- 0.0110,0.9645 +/- 0.0026,0.9308 +/- 0.0070,0.1795 +/- 0.0363,0.0270 +/- 0.0000,0.272,"3 Layers, Sum Readout, Edge+Delta Features (mean of 3 seeds)"
+Contingency-Held-Out Split (Unseen Contingencies),Logistic Regression,0.9510,0.8810,1.0000,0.9367,0.9737,0.9705,0.9018,0.0769,0.0000,0.195,C=10.0
+Contingency-Held-Out Split (Unseen Contingencies),MLP (Dense),0.8824,0.7660,0.9730,0.8571,0.9231,0.9551,0.8867,0.1692,0.0270,0.325,"layers=(64, 32), alpha=0.0001"
+Contingency-Held-Out Split (Unseen Contingencies),Random Forest,0.9706,0.9474,0.9730,0.9600,0.9677,0.9850,0.9677,0.0308,0.0270,0.330,"n_est=200, depth=8"
+Contingency-Held-Out Split (Unseen Contingencies),Rule-Based Heuristic,0.9314,0.8409,1.0000,0.9136,0.9635,0.9705,0.9016,0.1077,0.0000,0.490,Loading Threshold X=114.0%
+Contingency-Held-Out Split (Unseen Contingencies),XGBoost,0.9706,0.9250,1.0000,0.9610,0.9840,0.9834,0.9623,0.0462,0.0000,0.050,"lr=0.1, depth=3"
+Random Split,GINE (Graph Neural Network),0.8844 +/- 0.0063,0.8535 +/- 0.0227,0.8077 +/- 0.0544,0.8282 +/- 0.0167,0.8153 +/- 0.0395,0.9553 +/- 0.0057,0.9303 +/- 0.0083,0.0748 +/- 0.0192,0.1923 +/- 0.0544,0.623,"3 Layers, Sum Readout, Edge+Delta Features (mean of 3 seeds)"
+Random Split,Logistic Regression,0.9067,0.8519,0.8846,0.8679,0.8779,0.9615,0.9311,0.0816,0.1154,0.550,C=1.0
+Random Split,MLP (Dense),0.8400,0.7692,0.7692,0.7692,0.7692,0.9254,0.8783,0.1224,0.2308,0.470,"layers=(64, 32), alpha=0.0001"
+Random Split,Random Forest,0.9600,0.9259,0.9615,0.9434,0.9542,0.9898,0.9806,0.0408,0.0385,0.340,"n_est=100, depth=8"
+Random Split,Rule-Based Heuristic,0.8933,0.9500,0.7308,0.8261,0.7661,0.9914,0.9831,0.0204,0.2692,0.495,Loading Threshold X=119.0%
+Random Split,XGBoost,0.9600,0.9259,0.9615,0.9434,0.9542,0.9937,0.9884,0.0408,0.0385,0.590,"lr=0.05, depth=5"

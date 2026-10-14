@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <circle cx="64" cy="64" r="54" fill="#2b2b2b" stroke="#ffffff" stroke-width="6"/>
+  <!-- Power Load / Downward Demand Arrow -->
+  <polygon points="64,98 34,54 50,54 50,30 78,30 78,54 94,54" fill="#d98a1f" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="64" cy="64" r="44" fill="none" stroke="#8a7767" stroke-width="3" stroke-dasharray="6,4"/>
+</svg>

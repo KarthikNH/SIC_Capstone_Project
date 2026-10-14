@@ -1,0 +1,75 @@
+# ==============================================================================
+# Configuration File for Graph-Based Early Warning System for Cascading Failures
+# ==============================================================================
+
+project:
+  name: "cascading-failure-gnn"
+  seed: 42
+
+grid:
+  case_name: "case30"  # Selectable: "case30" (for debugging/checkpoints) or "case118"
+  calibrate_case118_ratings: true  # If true, sets realistic line ratings for IEEE-118 based on base flows
+  case118_rating_factor: 1.30      # Multiplier on base currents to define thermal limits for IEEE-118
+
+simulation:
+  min_load_scale: 0.65             # Minimum aggregate load scaling factor
+  max_load_scale: 1.20             # Maximum aggregate load scaling factor
+  per_bus_noise_std: 0.05          # Gaussian noise added independently per bus load
+  line_limit_factor: 1.15          # Trips branch when loading_percent > 100 * line_limit_factor
+  cascade_trip_threshold: 3        # Number of additional tripped branches >= K triggers cascade=1
+  cascade_load_shed_threshold: 0.15 # Relative load shed fraction >= threshold triggers cascade=1
+  max_cascade_iterations: 20       # Maximum sequential tripping iterations before halting
+  
+  contingency_probabilities:
+    n1_line: 0.70                  # Probability of single line outage
+    n2_line: 0.20                  # Probability of simultaneous two-line outage
+    n1_gen: 0.10                   # Probability of single generator outage
+
+dataset:
+  n_scenarios: 500                 # Number of valid simulated scenarios to generate
+  n_jobs: 4                        # Multiprocessing CPU workers (-1 for all cores)
+  batch_size: 50                   # Batch chunking size for multiprocessing execution
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  raw_file_name: "scenarios_raw.parquet"
+  raw_backup_pickle: "scenarios_raw.pkl"
+  processed_graphs_file: "graph_dataset.pt"
+  tabular_features_file: "tabular_features.parquet"
+  scalers_file: "scalers.pkl"
+  split_indices_file: "split_indices.pkl"
+  
+  include_delta_features: true     # Whether to include delta voltage, delta loading, etc.
+  
+  splits:
+    random:
+      train_ratio: 0.70
+      val_ratio: 0.15
+      test_ratio: 0.15
+    contingency_held_out:
+      test_contingency_ratio: 0.20
+      val_contingency_ratio: 0.15
+    operating_point_held_out:
+      high_load_quantile: 0.80     # Top 20% highest pre-contingency loads reserved for test
+      val_ratio: 0.15
+
+results:
+  base_dir: "results"
+  figures_dir: "results/figures"
+  tables_dir: "results/tables"
+  logs_dir: "results/logs"
+
+model:
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.15
+  readout: "sum"                   # "sum", "mean", or "attention"
+  use_edge_features: true
+
+training:
+  batch_size: 32
+  lr: 0.001
+  weight_decay: 0.0001
+  max_epochs: 60
+  patience: 15
+  seeds: [42, 43, 44]
+  loss: "weighted_bce"             # "weighted_bce" or "focal"

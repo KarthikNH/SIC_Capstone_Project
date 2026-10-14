@@ -1,0 +1,715 @@
+{
+  "grid_case": "case30",
+  "num_buses": 30,
+  "num_branches": 41,
+  "buses": [
+    {
+      "bus_id": 0,
+      "x": -0.8215,
+      "y": 0.55,
+      "z": 1.1088,
+      "vn_kv": 135.0,
+      "type": "slack",
+      "degree": 2
+    },
+    {
+      "bus_id": 1,
+      "x": -0.4878,
+      "y": 0.35,
+      "z": 0.8538,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 4
+    },
+    {
+      "bus_id": 2,
+      "x": -0.8318,
+      "y": -0.1522,
+      "z": 0.8168,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 3,
+      "x": -0.4994,
+      "y": -0.1705,
+      "z": 0.4446,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 4
+    },
+    {
+      "bus_id": 4,
+      "x": -0.3701,
+      "y": 0.05,
+      "z": 1.217,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 2
+    },
+    {
+      "bus_id": 5,
+      "x": -0.1782,
+      "y": 0.05,
+      "z": 0.439,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 7
+    },
+    {
+      "bus_id": 6,
+      "x": -0.1908,
+      "y": -0.4307,
+      "z": 0.9439,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 7,
+      "x": 0.2143,
+      "y": -0.4474,
+      "z": 0.6293,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 8,
+      "x": -0.6238,
+      "y": 0.05,
+      "z": 0.1607,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 3
+    },
+    {
+      "bus_id": 9,
+      "x": -0.3986,
+      "y": -0.2975,
+      "z": -0.2689,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 6
+    },
+    {
+      "bus_id": 10,
+      "x": -1.0801,
+      "y": 0.05,
+      "z": 0.227,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 1
+    },
+    {
+      "bus_id": 11,
+      "x": -0.2873,
+      "y": -0.1518,
+      "z": -0.1997,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 5
+    },
+    {
+      "bus_id": 12,
+      "x": -0.0267,
+      "y": 0.35,
+      "z": -0.0346,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 1
+    },
+    {
+      "bus_id": 13,
+      "x": -0.0835,
+      "y": -0.2521,
+      "z": -0.5187,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 14,
+      "x": -0.0216,
+      "y": -0.355,
+      "z": -0.7871,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 4
+    },
+    {
+      "bus_id": 15,
+      "x": -0.7205,
+      "y": -0.432,
+      "z": -0.2994,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 16,
+      "x": -0.825,
+      "y": -0.4469,
+      "z": -0.4612,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 17,
+      "x": -0.2251,
+      "y": -0.3927,
+      "z": -1.2399,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 18,
+      "x": -0.5574,
+      "y": -0.295,
+      "z": -1.2814,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 19,
+      "x": -0.5872,
+      "y": -0.1996,
+      "z": -0.8471,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 20,
+      "x": -0.2197,
+      "y": -0.1514,
+      "z": -0.5796,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 21,
+      "x": 0.1514,
+      "y": 0.35,
+      "z": -0.4648,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 3
+    },
+    {
+      "bus_id": 22,
+      "x": 0.4598,
+      "y": 0.35,
+      "z": -0.8273,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 2
+    },
+    {
+      "bus_id": 23,
+      "x": 0.7153,
+      "y": -0.3573,
+      "z": -0.4955,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 3
+    },
+    {
+      "bus_id": 24,
+      "x": 1.1962,
+      "y": 0.05,
+      "z": -0.1687,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 3
+    },
+    {
+      "bus_id": 25,
+      "x": 1.6,
+      "y": -0.4463,
+      "z": -0.3027,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 1
+    },
+    {
+      "bus_id": 26,
+      "x": 1.1533,
+      "y": 0.35,
+      "z": 0.3624,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 4
+    },
+    {
+      "bus_id": 27,
+      "x": 0.502,
+      "y": 0.05,
+      "z": 0.4922,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 3
+    },
+    {
+      "bus_id": 28,
+      "x": 1.4815,
+      "y": -0.1977,
+      "z": 0.6214,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    {
+      "bus_id": 29,
+      "x": 1.5625,
+      "y": -0.1511,
+      "z": 0.4596,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    }
+  ],
+  "bus_map": {
+    "0": {
+      "bus_id": 0,
+      "x": -0.8215,
+      "y": 0.55,
+      "z": 1.1088,
+      "vn_kv": 135.0,
+      "type": "slack",
+      "degree": 2
+    },
+    "1": {
+      "bus_id": 1,
+      "x": -0.4878,
+      "y": 0.35,
+      "z": 0.8538,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 4
+    },
+    "2": {
+      "bus_id": 2,
+      "x": -0.8318,
+      "y": -0.1522,
+      "z": 0.8168,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "3": {
+      "bus_id": 3,
+      "x": -0.4994,
+      "y": -0.1705,
+      "z": 0.4446,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 4
+    },
+    "4": {
+      "bus_id": 4,
+      "x": -0.3701,
+      "y": 0.05,
+      "z": 1.217,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 2
+    },
+    "5": {
+      "bus_id": 5,
+      "x": -0.1782,
+      "y": 0.05,
+      "z": 0.439,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 7
+    },
+    "6": {
+      "bus_id": 6,
+      "x": -0.1908,
+      "y": -0.4307,
+      "z": 0.9439,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "7": {
+      "bus_id": 7,
+      "x": 0.2143,
+      "y": -0.4474,
+      "z": 0.6293,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "8": {
+      "bus_id": 8,
+      "x": -0.6238,
+      "y": 0.05,
+      "z": 0.1607,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 3
+    },
+    "9": {
+      "bus_id": 9,
+      "x": -0.3986,
+      "y": -0.2975,
+      "z": -0.2689,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 6
+    },
+    "10": {
+      "bus_id": 10,
+      "x": -1.0801,
+      "y": 0.05,
+      "z": 0.227,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 1
+    },
+    "11": {
+      "bus_id": 11,
+      "x": -0.2873,
+      "y": -0.1518,
+      "z": -0.1997,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 5
+    },
+    "12": {
+      "bus_id": 12,
+      "x": -0.0267,
+      "y": 0.35,
+      "z": -0.0346,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 1
+    },
+    "13": {
+      "bus_id": 13,
+      "x": -0.0835,
+      "y": -0.2521,
+      "z": -0.5187,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "14": {
+      "bus_id": 14,
+      "x": -0.0216,
+      "y": -0.355,
+      "z": -0.7871,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 4
+    },
+    "15": {
+      "bus_id": 15,
+      "x": -0.7205,
+      "y": -0.432,
+      "z": -0.2994,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "16": {
+      "bus_id": 16,
+      "x": -0.825,
+      "y": -0.4469,
+      "z": -0.4612,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "17": {
+      "bus_id": 17,
+      "x": -0.2251,
+      "y": -0.3927,
+      "z": -1.2399,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "18": {
+      "bus_id": 18,
+      "x": -0.5574,
+      "y": -0.295,
+      "z": -1.2814,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "19": {
+      "bus_id": 19,
+      "x": -0.5872,
+      "y": -0.1996,
+      "z": -0.8471,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "20": {
+      "bus_id": 20,
+      "x": -0.2197,
+      "y": -0.1514,
+      "z": -0.5796,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "21": {
+      "bus_id": 21,
+      "x": 0.1514,
+      "y": 0.35,
+      "z": -0.4648,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 3
+    },
+    "22": {
+      "bus_id": 22,
+      "x": 0.4598,
+      "y": 0.35,
+      "z": -0.8273,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 2
+    },
+    "23": {
+      "bus_id": 23,
+      "x": 0.7153,
+      "y": -0.3573,
+      "z": -0.4955,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 3
+    },
+    "24": {
+      "bus_id": 24,
+      "x": 1.1962,
+      "y": 0.05,
+      "z": -0.1687,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 3
+    },
+    "25": {
+      "bus_id": 25,
+      "x": 1.6,
+      "y": -0.4463,
+      "z": -0.3027,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 1
+    },
+    "26": {
+      "bus_id": 26,
+      "x": 1.1533,
+      "y": 0.35,
+      "z": 0.3624,
+      "vn_kv": 135.0,
+      "type": "generator",
+      "degree": 4
+    },
+    "27": {
+      "bus_id": 27,
+      "x": 0.502,
+      "y": 0.05,
+      "z": 0.4922,
+      "vn_kv": 135.0,
+      "type": "substation",
+      "degree": 3
+    },
+    "28": {
+      "bus_id": 28,
+      "x": 1.4815,
+      "y": -0.1977,
+      "z": 0.6214,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    },
+    "29": {
+      "bus_id": 29,
+      "x": 1.5625,
+      "y": -0.1511,
+      "z": 0.4596,
+      "vn_kv": 135.0,
+      "type": "load",
+      "degree": 2
+    }
+  },
+  "branches": [
+    {
+      "from_bus": 0,
+      "to_bus": 1
+    },
+    {
+      "from_bus": 0,
+      "to_bus": 2
+    },
+    {
+      "from_bus": 1,
+      "to_bus": 3
+    },
+    {
+      "from_bus": 1,
+      "to_bus": 4
+    },
+    {
+      "from_bus": 1,
+      "to_bus": 5
+    },
+    {
+      "from_bus": 2,
+      "to_bus": 3
+    },
+    {
+      "from_bus": 3,
+      "to_bus": 5
+    },
+    {
+      "from_bus": 3,
+      "to_bus": 11
+    },
+    {
+      "from_bus": 4,
+      "to_bus": 6
+    },
+    {
+      "from_bus": 5,
+      "to_bus": 6
+    },
+    {
+      "from_bus": 5,
+      "to_bus": 7
+    },
+    {
+      "from_bus": 5,
+      "to_bus": 8
+    },
+    {
+      "from_bus": 5,
+      "to_bus": 9
+    },
+    {
+      "from_bus": 5,
+      "to_bus": 27
+    },
+    {
+      "from_bus": 7,
+      "to_bus": 27
+    },
+    {
+      "from_bus": 8,
+      "to_bus": 10
+    },
+    {
+      "from_bus": 8,
+      "to_bus": 9
+    },
+    {
+      "from_bus": 9,
+      "to_bus": 19
+    },
+    {
+      "from_bus": 9,
+      "to_bus": 16
+    },
+    {
+      "from_bus": 9,
+      "to_bus": 20
+    },
+    {
+      "from_bus": 9,
+      "to_bus": 21
+    },
+    {
+      "from_bus": 11,
+      "to_bus": 12
+    },
+    {
+      "from_bus": 11,
+      "to_bus": 13
+    },
+    {
+      "from_bus": 11,
+      "to_bus": 14
+    },
+    {
+      "from_bus": 11,
+      "to_bus": 15
+    },
+    {
+      "from_bus": 13,
+      "to_bus": 14
+    },
+    {
+      "from_bus": 14,
+      "to_bus": 17
+    },
+    {
+      "from_bus": 14,
+      "to_bus": 22
+    },
+    {
+      "from_bus": 15,
+      "to_bus": 16
+    },
+    {
+      "from_bus": 17,
+      "to_bus": 18
+    },
+    {
+      "from_bus": 18,
+      "to_bus": 19
+    },
+    {
+      "from_bus": 20,
+      "to_bus": 21
+    },
+    {
+      "from_bus": 21,
+      "to_bus": 23
+    },
+    {
+      "from_bus": 22,
+      "to_bus": 23
+    },
+    {
+      "from_bus": 23,
+      "to_bus": 24
+    },
+    {
+      "from_bus": 24,
+      "to_bus": 25
+    },
+    {
+      "from_bus": 24,
+      "to_bus": 26
+    },
+    {
+      "from_bus": 26,
+      "to_bus": 27
+    },
+    {
+      "from_bus": 26,
+      "to_bus": 28
+    },
+    {
+      "from_bus": 26,
+      "to_bus": 29
+    },
+    {
+      "from_bus": 28,
+      "to_bus": 29
+    }
+  ]
+}

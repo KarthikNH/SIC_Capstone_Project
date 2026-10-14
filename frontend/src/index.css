@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #1d1d1d;
+  --color-charcoal: #2b2b2b;
+  --color-charcoal-dark: #181a1d;
+  --color-soft: #f3f4f6;
+  --color-label: #8a7767;
+  --color-amber: #d98a1f;
+  --color-red: #c8443b;
+  --color-gridgrey: #9aa3ad;
+
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-sans: "Poppins", system-ui, sans-serif;
+}
+
+:root {
+  --ink: #1d1d1d;
+  --char: #2b2b2b;
+  --soft: #f3f4f6;
+  --lab: #8a7767;
+  --amb: #d98a1f;
+  --red: #c8443b;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Poppins', system-ui, sans-serif;
+  color: var(--ink);
+  background: #ffffff;
+  margin: 0;
+  padding: 0;
+}
+
+/* Custom aesthetic utility classes matching the Estate reference */
+.eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--lab);
+  font-weight: 500;
+}
+
+.btn-estate {
+  display: inline-block;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  padding: 10px 26px;
+  font-family: 'Poppins', sans-serif;
+  font-weight: 500;
+  font-size: 13px;
+  background: transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.25s ease;
+}
+
+.btn-estate:hover {
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.btn-estate-dark {
+  display: inline-block;
+  color: var(--ink);
+  border: 1px solid var(--ink);
+  padding: 10px 24px;
+  font-family: 'Poppins', sans-serif;
+  font-weight: 500;
+  font-size: 13px;
+  background: transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.25s ease;
+}
+
+.btn-estate-dark:hover {
+  background: var(--ink);
+  color: #ffffff;
+}

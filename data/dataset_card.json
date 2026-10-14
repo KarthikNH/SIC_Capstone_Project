@@ -1,0 +1,336 @@
+{
+  "dataset_name": "Gridwatch Power Grid Cascading Failure Dataset",
+  "version": "1.0.0",
+  "description": "High-fidelity AC power flow contingency dataset capturing immediate post-contingency states (t=0+) and downstream cascade propagation ground truth for Graph Isomorphism Networks.",
+  "grids_used": [
+    {
+      "grid_id": "case30",
+      "name": "IEEE 30-Bus System",
+      "num_buses": 30,
+      "num_branches": 41,
+      "base_mva": 100.0,
+      "role": "Primary training and validation benchmark"
+    },
+    {
+      "grid_id": "case118",
+      "name": "IEEE 118-Bus System",
+      "num_buses": 118,
+      "num_branches": 186,
+      "base_mva": 100.0,
+      "role": "Cross-scale evaluation and generalization benchmark"
+    }
+  ],
+  "scenario_counts": {
+    "total_simulated": 500,
+    "valid_scenarios": 500,
+    "non_converged_power_flow": 0,
+    "islanded_topologies": 0
+  },
+  "contingency_distribution": {
+    "N-1_line": {
+      "count": 345,
+      "percentage": 69.0
+    },
+    "N-2_line": {
+      "count": 112,
+      "percentage": 22.4
+    },
+    "N-1_gen": {
+      "count": 43,
+      "percentage": 8.6
+    }
+  },
+  "load_range": {
+    "min_load_scale": 0.65,
+    "max_load_scale": 1.2,
+    "per_bus_gaussian_noise_std": 0.05,
+    "observed_pre_contingency_load_mw": {
+      "min": 121.23,
+      "max": 230.85,
+      "mean": 177.87,
+      "std": 30.21
+    }
+  },
+  "simulator_settings": {
+    "line_limit_factor": 1.15,
+    "cascade_trip_threshold_K": 3,
+    "cascade_load_shed_threshold": 0.15,
+    "max_cascade_iterations": 20,
+    "random_seeds": [
+      42,
+      43,
+      44
+    ]
+  },
+  "label_definition": {
+    "primary_label": "cascade (binary {0, 1})",
+    "condition": "cascade = 1 if (additional_branch_trips >= 3) OR (relative_load_shed >= 0.15), else 0",
+    "secondary_targets": [
+      {
+        "name": "additional_trips",
+        "unit": "integer count",
+        "description": "Number of subsequent branches tripped after initial outage"
+      },
+      {
+        "name": "load_shed_fraction",
+        "unit": "ratio [0.0 - 1.0]",
+        "description": "Fraction of aggregate active load unserved"
+      },
+      {
+        "name": "load_shed_mw",
+        "unit": "MW",
+        "description": "Absolute active power load shed"
+      }
+    ]
+  },
+  "splits_and_leakage_audit": {
+    "split_definitions": {
+      "random": "Stratified random split (70% train / 15% val / 15% test) matching overall cascade class balance.",
+      "contingency_held_out": "Grouped split where unique contingency elements in test and val NEVER appear in train.",
+      "operating_point_held_out": "Stress-regime split reserving top 20% highest pre-contingency aggregate loads for test."
+    },
+    "class_balance_per_split": {
+      "random": {
+        "train": {
+          "total": 350,
+          "positive_cascade": 122,
+          "negative_safe": 228,
+          "cascade_rate": 0.3486
+        },
+        "val": {
+          "total": 75,
+          "positive_cascade": 26,
+          "negative_safe": 49,
+          "cascade_rate": 0.3467
+        },
+        "test": {
+          "total": 75,
+          "positive_cascade": 26,
+          "negative_safe": 49,
+          "cascade_rate": 0.3467
+        }
+      },
+      "contingency_held_out": {
+        "train": {
+          "total": 336,
+          "positive_cascade": 116,
+          "negative_safe": 220,
+          "cascade_rate": 0.3452
+        },
+        "val": {
+          "total": 62,
+          "positive_cascade": 21,
+          "negative_safe": 41,
+          "cascade_rate": 0.3387
+        },
+        "test": {
+          "total": 102,
+          "positive_cascade": 37,
+          "negative_safe": 65,
+          "cascade_rate": 0.3627
+        }
+      },
+      "operating_point_held_out": {
+        "train": {
+          "total": 340,
+          "positive_cascade": 69,
+          "negative_safe": 271,
+          "cascade_rate": 0.2029
+        },
+        "val": {
+          "total": 60,
+          "positive_cascade": 12,
+          "negative_safe": 48,
+          "cascade_rate": 0.2
+        },
+        "test": {
+          "total": 100,
+          "positive_cascade": 93,
+          "negative_safe": 7,
+          "cascade_rate": 0.93
+        }
+      }
+    },
+    "leakage_assertions": {
+      "random": {
+        "disjoint_subsets": true,
+        "complete_coverage": true,
+        "zero_scenario_leakage": true,
+        "contingency_overlap_between_train_and_eval": 0,
+        "contingency_leakage_free": true
+      },
+      "contingency_held_out": {
+        "disjoint_subsets": true,
+        "complete_coverage": true,
+        "zero_scenario_leakage": true,
+        "contingency_overlap_between_train_and_eval": 0,
+        "contingency_leakage_free": true
+      },
+      "operating_point_held_out": {
+        "disjoint_subsets": true,
+        "complete_coverage": true,
+        "zero_scenario_leakage": true,
+        "contingency_overlap_between_train_and_eval": 0,
+        "contingency_leakage_free": true
+      }
+    },
+    "zero_temporal_leakage_guarantee": "Verified: All graph node and edge features are computed strictly from t=0+ (the initial post-contingency AC power flow solution). Subsequent cascade iteration states, intermediate branch trippings, and islanding steps are strictly isolated from model inputs."
+  },
+  "feature_dictionary": [
+    {
+      "name": "vm_pu",
+      "type": "node",
+      "unit": "p.u.",
+      "description": "Bus voltage magnitude computed from the first post-contingency AC power flow solution (nominal 1.0 p.u.).",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "va_degree",
+      "type": "node",
+      "unit": "degrees",
+      "description": "Bus voltage phase angle relative to the system reference / slack bus.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "p_load_mw",
+      "type": "node",
+      "unit": "MW",
+      "description": "Active power demand demanded at the bus under current operating point load scaling.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "q_load_mvar",
+      "type": "node",
+      "unit": "MVAr",
+      "description": "Reactive power demand demanded at the bus.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "p_gen_mw",
+      "type": "node",
+      "unit": "MW",
+      "description": "Active power scheduled by online generation units attached to the bus.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "q_gen_mvar",
+      "type": "node",
+      "unit": "MVAr",
+      "description": "Reactive power dispatched by online generators.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "delta_vm",
+      "type": "node",
+      "unit": "p.u.",
+      "description": "Voltage magnitude deviation from nominal unity voltage (|V| - 1.0 p.u.).",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "net_p_mw",
+      "type": "node",
+      "unit": "MW",
+      "description": "Net active power injection balance (P_gen - P_load).",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "net_q_mvar",
+      "type": "node",
+      "unit": "MVAr",
+      "description": "Net reactive power injection balance (Q_gen - Q_load).",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "is_pq",
+      "type": "node",
+      "unit": "binary {0, 1}",
+      "description": "Categorical flag indicating a load bus with fixed active and reactive power injections.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "is_pv",
+      "type": "node",
+      "unit": "binary {0, 1}",
+      "description": "Categorical flag indicating a generator bus with controlled voltage setpoint.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "is_slack",
+      "type": "node",
+      "unit": "binary {0, 1}",
+      "description": "Categorical flag indicating the reference / angle-slack bus.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "is_outaged_endpoint",
+      "type": "node",
+      "unit": "binary {0, 1}",
+      "description": "Contingency indicator: 1 if the bus is an immediate terminal of the initially outaged branch or generator.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "p_flow_mw",
+      "type": "edge",
+      "unit": "MW",
+      "description": "Post-contingency active power flow through the branch directed from origin to destination bus.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "q_flow_mvar",
+      "type": "edge",
+      "unit": "MVAr",
+      "description": "Post-contingency reactive power flow through the branch.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "loading_percent",
+      "type": "edge",
+      "unit": "%",
+      "description": "Branch thermal loading relative to rated current capacity (I_actual / I_max * 100).",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "r_ohm",
+      "type": "edge",
+      "unit": "Ohm",
+      "description": "Total series resistance of the branch conductor.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "x_ohm",
+      "type": "edge",
+      "unit": "Ohm",
+      "description": "Total series inductive reactance of the branch conductor.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "rating_ka",
+      "type": "edge",
+      "unit": "kA",
+      "description": "Maximum continuous current rating (thermal limit) of the branch.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "thermal_margin_percent",
+      "type": "edge",
+      "unit": "%",
+      "description": "Thermal buffer margin remaining before the automated tripping threshold (115% - loading_percent).",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "in_service",
+      "type": "edge",
+      "unit": "binary {0, 1}",
+      "description": "Operational status flag: 1 if energized, 0 if outaged by initial disturbance.",
+      "first_post_contingency_only": true
+    },
+    {
+      "name": "is_outaged_branch",
+      "type": "edge",
+      "unit": "binary {0, 1}",
+      "description": "Contingency trigger flag: 1 if this branch was selected as the initiating N-1 or N-2 event.",
+      "first_post_contingency_only": true
+    }
+  ],
+  "citation": "Gridwatch: Graph-Based Early Warning System for Cascading Failures in Transmission Grids (2026)."
+}

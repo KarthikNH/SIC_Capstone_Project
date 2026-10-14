@@ -1,0 +1,9 @@
+{
+  "num_evaluated_graphs": 40,
+  "top_k": 5,
+  "mean_overlap_with_most_loaded_branches": 0.18500000000000003,
+  "std_overlap_with_most_loaded_branches": 0.18648056198971516,
+  "mean_overlap_with_electrically_closest_branches": 0.135,
+  "std_overlap_with_electrically_closest_branches": 0.16363068171953574,
+  "combined_physical_relevance_score": 0.26
+}
