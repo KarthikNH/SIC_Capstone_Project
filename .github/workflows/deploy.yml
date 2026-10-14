@@ -1,5 +1,5 @@
 
-name: Deploy SIC Capstone to GitHub Pages
+name: Deploy Gridwatch to GitHub Pages
 
 on:
   push:
@@ -17,7 +17,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Upload website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: frontend/dist
+
   deploy:
+    needs: build
     runs-on: ubuntu-latest
 
     environment:
@@ -25,17 +51,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload website files
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: .
-
       - name: Deploy website
         id: deployment
         uses: actions/deploy-pages@v4
