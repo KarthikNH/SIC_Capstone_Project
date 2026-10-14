@@ -151,6 +151,9 @@ class GINEClassifier(nn.Module):
         # Graph Readout
         if self.readout_type == "sum":
             g = global_add_pool(h, batch)
+            norm_val = g.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+            scale = torch.clamp(270.0 / norm_val, max=1.0)
+            g = g * scale
         elif self.readout_type == "mean":
             g = global_mean_pool(h, batch)
         elif self.readout_type == "attention":
@@ -194,6 +197,9 @@ class GINEClassifier(nn.Module):
 
         if self.readout_type == "sum":
             g = global_add_pool(h, batch)
+            norm_val = g.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+            scale = torch.clamp(270.0 / norm_val, max=1.0)
+            g = g * scale
         elif self.readout_type == "mean":
             g = global_mean_pool(h, batch)
         elif self.readout_type == "attention":

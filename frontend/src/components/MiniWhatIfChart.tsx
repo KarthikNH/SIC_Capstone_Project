@@ -1,9 +1,12 @@
 import React, { useMemo } from 'react';
 import { useGridStore } from '../store';
 import type { WhatIfPoint } from '../types';
+import { CANONICAL_ALERT_THRESHOLD, formatPercent } from '../utils/probability';
 
 export const MiniWhatIfChart: React.FC = () => {
-  const { whatifCurve, loadingWhatif, loadScale } = useGridStore();
+  const { whatifCurve, loadingWhatif, loadScale, prediction } = useGridStore();
+
+  const threshold = prediction?.alert_threshold ?? prediction?.operating_threshold ?? CANONICAL_ALERT_THRESHOLD;
 
   const points: WhatIfPoint[] = useMemo(() => {
     if (!whatifCurve) return [];
@@ -39,7 +42,7 @@ export const MiniWhatIfChart: React.FC = () => {
     return points
       .map((pt, idx) => {
         const x = getX(pt.load_scale);
-        const y = getY(pt.cascade_probability);
+        const y = getY(pt.cascade_probability ?? (pt as any).probability ?? 0);
         return `${idx === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
       })
       .join(' ');
@@ -62,7 +65,7 @@ export const MiniWhatIfChart: React.FC = () => {
         ? curr
         : prev;
     }, points[0]);
-    return getY(closest.cascade_probability);
+    return getY(closest.cascade_probability ?? (closest as any).probability ?? 0);
   }, [points, currentLoadPercent]);
 
   const currentX = getX(loadScale);
@@ -82,14 +85,15 @@ export const MiniWhatIfChart: React.FC = () => {
           className="w-full h-24 overflow-visible"
           aria-label="What-If Risk Trajectory Curve"
         >
-          {/* Subtle horizontal grid lines */}
+          {/* Canonical threshold line (dashed red/amber) */}
           <line
             x1={padding.left}
-            y1={getY(0.5)}
+            y1={getY(threshold)}
             x2={width - padding.right}
-            y2={getY(0.5)}
-            stroke="#e5e7eb"
+            y2={getY(threshold)}
+            stroke="#f59e0b"
             strokeDasharray="3 3"
+            strokeWidth="1.2"
           />
           <line
             x1={padding.left}
@@ -112,13 +116,14 @@ export const MiniWhatIfChart: React.FC = () => {
           </text>
           <text
             x={padding.left - 4}
-            y={getY(0.5) + 3}
+            y={getY(threshold) + 3}
             fontSize="8.5"
             textAnchor="end"
-            fill="#888"
+            fill="#f59e0b"
             fontFamily="monospace"
+            fontWeight="bold"
           >
-            0.5
+            {threshold.toFixed(2)}
           </text>
           <text
             x={padding.left - 4}
@@ -190,7 +195,9 @@ export const MiniWhatIfChart: React.FC = () => {
           <span className="flex items-center gap-1 font-mono">
             <span className="w-1.5 h-1.5 rounded-full bg-red inline-block" /> Active Operating Point ({currentLoadPercent}%)
           </span>
-          <span className="font-mono text-[#888]">Threshold: 50%</span>
+          <span className="font-mono text-amber font-semibold">
+            Alert Threshold: {formatPercent(threshold * 100, 0)}
+          </span>
         </div>
       </div>
     </div>

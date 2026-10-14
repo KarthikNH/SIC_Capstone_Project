@@ -4,6 +4,10 @@ import { GridUploadModal } from './GridUploadModal';
 import { MiniWhatIfChart } from './MiniWhatIfChart';
 import { DatasetInspector } from './DatasetInspector';
 import { ChatDrawer } from './ChatDrawer';
+import { ErrorBoundary } from './ErrorBoundary';
+import { CascadeReplayPanel } from './CascadeReplayPanel';
+import { SuggestedFixCard } from './SuggestedFixCard';
+import { formatBranchName, CANONICAL_ALERT_THRESHOLD, formatPercent, formatProbability, assertNotNaN } from '../utils/probability';
 import { useGridStore } from '../store';
 import {
   RotateCcw,
@@ -12,22 +16,21 @@ import {
   Undo2,
   ChevronDown,
   ChevronUp,
-  Play,
-  Pause,
-  RotateCw,
   Sparkles,
   Sliders,
   AlertTriangle,
   UploadCloud,
   Flame,
-  CheckCircle2,
   Activity,
   BarChart3,
   Eye,
   ShieldAlert,
   Database,
   ArrowRight,
-  AlertCircle
+  AlertCircle,
+  Maximize2,
+  Minimize2,
+  Bot
 } from 'lucide-react';
 
 export const LiveDemo: React.FC = () => {
@@ -67,16 +70,29 @@ export const LiveDemo: React.FC = () => {
     replayData,
     replayStepIndex,
     isPlayingReplay,
-    loadingReplay,
-    startCascadeReplay,
-    stopCascadeReplay,
     setReplayStepIndex,
     togglePlayPauseReplay,
     globalInsights,
     fetchGlobalInsights,
     setOutagedElements,
-    viewMode
+    viewMode,
+    setViewMode,
+    labelMode,
+    setLabelMode,
+    buildingsOpacity,
+    setBuildingsOpacity,
+    applyToStructures,
+    setApplyToStructures,
+    groupByVoltage,
+    setGroupByVoltage,
+    topologyOverlay,
+    setTopologyOverlay,
   } = useGridStore();
+
+  const uniqueVoltages = useMemo(
+    () => Array.from(new Set(buses.map((b) => b.vn_kv || 132))),
+    [buses]
+  );
 
   // Search-as-you-type state
   const [searchQuery, setSearchQuery] = useState('');
@@ -118,17 +134,91 @@ export const LiveDemo: React.FC = () => {
     fetchGlobalInsights();
   }, [fetchGridList, fetchGridStats, fetchGlobalInsights]);
 
-  // Replay automatic step progression
+  // Fullscreen Contingency Analysis State & Fallback
+  const contingencyContainerRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFallbackFullscreen, setIsFallbackFullscreen] = useState(false);
+
+  const enterFullscreen = () => {
+    const el = contingencyContainerRef.current;
+    if (!el) return;
+    if (el.requestFullscreen) {
+      el.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+      }).catch(() => {
+        setIsFallbackFullscreen(true);
+        setIsFullscreen(true);
+      });
+    } else if ((el as any).webkitRequestFullscreen) {
+      (el as any).webkitRequestFullscreen();
+      setIsFullscreen(true);
+    } else {
+      setIsFallbackFullscreen(true);
+      setIsFullscreen(true);
+    }
+  };
+
+  const exitFullscreen = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    setIsFallbackFullscreen(false);
+    setIsFullscreen(false);
+  };
+
+  const toggleFullscreen = () => {
+    if (isFullscreen || isFallbackFullscreen || document.fullscreenElement) {
+      exitFullscreen();
+    } else {
+      enterFullscreen();
+    }
+  };
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      const isNowFs = Boolean(document.fullscreenElement);
+      if (!isNowFs && !isFallbackFullscreen) {
+        setIsFullscreen(false);
+      } else if (isNowFs) {
+        setIsFullscreen(true);
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, [isFallbackFullscreen]);
+
+  // Keyboard shortcut: 'F' toggles fullscreen, 'Escape' exits
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) {
+        return;
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+      } else if (e.key === 'Escape' && (isFullscreen || isFallbackFullscreen)) {
+        exitFullscreen();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFullscreen, isFallbackFullscreen]);
+
+  // Replay automatic step progression with speed selector support
   useEffect(() => {
     let interval: any = null;
     if (isPlayingReplay && replayData && replayStepIndex >= 0) {
+      const speed = useGridStore.getState().replaySpeed || 1;
+      const stepDuration = Math.round(1200 / speed);
       interval = setInterval(() => {
-        if (replayStepIndex < replayData.total_steps - 1) {
-          setReplayStepIndex(replayStepIndex + 1);
+        const { replayStepIndex: curIdx, replayData: curData } = useGridStore.getState();
+        if (curData && curIdx < curData.total_steps - 1) {
+          setReplayStepIndex(curIdx + 1);
         } else {
           togglePlayPauseReplay();
         }
-      }, 1400);
+      }, stepDuration);
     }
     return () => {
       if (interval) clearInterval(interval);
@@ -142,7 +232,7 @@ export const LiveDemo: React.FC = () => {
     const results: Array<{ id: string; label: string; type: 'branch' | 'generator'; isOut: boolean }> = [];
 
     branches.forEach((br) => {
-      const name = br.name || `Line ${br.from_bus}-${br.to_bus}`;
+      const name = br.name || formatBranchName(br.from_bus, br.to_bus, 1);
       const idStr = `line_${br.id}`;
       if (
         name.toLowerCase().includes(q) ||
@@ -163,7 +253,7 @@ export const LiveDemo: React.FC = () => {
       .filter((b) => b.type === 'generator')
       .forEach((b) => {
         const idStr = `gen_${b.id}`;
-        const label = `Generator at Bus ${b.id} (${b.gen_p_mw.toFixed(1)} MW)`;
+        const label = `Generator at Bus ${b.id + 1} (${b.gen_p_mw.toFixed(1)} MW)`;
         if (label.toLowerCase().includes(q) || String(b.id) === q) {
           results.push({
             id: idStr,
@@ -216,14 +306,16 @@ export const LiveDemo: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  // Format Risk Metrics
-  const prob = prediction ? Math.round(prediction.cascade_probability * 100) : 14;
-  const rawLevel = String(prediction?.alert_level || 'Low');
-  const alertLevel: 'Low' | 'Medium' | 'High' = rawLevel.toLowerCase().includes('high')
-    ? 'High'
-    : rawLevel.toLowerCase().includes('med')
-    ? 'Medium'
-    : 'Low';
+  // Format Risk Metrics using Single Source of Truth
+  const rawProb = prediction?.probability ?? prediction?.cascade_probability ?? null;
+  const canonicalThreshold = prediction?.alert_threshold ?? prediction?.operating_threshold ?? CANONICAL_ALERT_THRESHOLD;
+  const alertLevel: 'Low' | 'Medium' | 'High' =
+    prediction?.alert_level ||
+    (rawProb !== null && rawProb >= 0.70
+      ? 'High'
+      : rawProb !== null && rawProb >= canonicalThreshold
+      ? 'Medium'
+      : 'Low');
 
   const riskColor =
     alertLevel === 'High'
@@ -237,8 +329,10 @@ export const LiveDemo: React.FC = () => {
     return gridList.find((g) => g.id === gridCase);
   }, [gridList, gridCase]);
 
-  const oodStatus = prediction?.ood_status || activeGridMeta?.ood_status;
-  const isOod = oodStatus && oodStatus.status !== 'in_range';
+  // Built-in training grids (case30, case118) must never show OOD badge at normal operating points
+  const isBuiltInGrid = gridCase.toLowerCase() === 'case30' || gridCase.toLowerCase() === 'case118';
+  const oodStatus = isBuiltInGrid ? null : (prediction?.ood_status || activeGridMeta?.ood_status);
+  const isOod = !isBuiltInGrid && oodStatus && oodStatus.status !== 'in_range';
 
   // Top Fragile Lines from Criticality screening
   const topCriticalList = useMemo(() => {
@@ -246,11 +340,10 @@ export const LiveDemo: React.FC = () => {
     return criticalityData.top_10_critical_elements.slice(0, 5);
   }, [criticalityData]);
 
-  // Replay ground truth check
-  const isReplayComplete = replayData && replayStepIndex >= replayData.total_steps - 1;
-  const actualCascadeOccurred = replayData && replayData.cascade === 1;
-  const predictedCascade = prob >= 50;
-  const predictionWasCorrect = isReplayComplete && predictedCascade === actualCascadeOccurred;
+  // Assertion for NaN prevention in dev
+  if (rawProb !== null) {
+    assertNotNaN(rawProb, 'Early Warning rawProb');
+  }
 
   return (
     <section id="demo" className="py-16 md:py-24 border-t border-[#e5e7eb] max-w-7xl mx-auto px-6 lg:px-8">
@@ -356,7 +449,7 @@ export const LiveDemo: React.FC = () => {
           <span className="eyebrow">Outage Selection:</span>
           <span className="text-[#666] font-mono">
             {outagedElements.length > 0
-              ? outagedElements.map((x) => x.replace('_', ' ').toUpperCase()).join(' + ')
+              ? outagedElements.map((x) => formatBranchName(x, branches)).join(' + ')
               : 'None (Nominal Topology)'}
           </span>
           {outagedElements.length > 0 && (
@@ -394,6 +487,16 @@ export const LiveDemo: React.FC = () => {
           >
             <RotateCcw className="w-3 h-3" />
             <span>Reset Camera</span>
+          </button>
+
+          <button
+            onClick={toggleFullscreen}
+            className="text-xs text-[#555] hover:text-ink flex items-center gap-1.5 py-1 px-2.5 border border-[#cfd3d8] bg-white transition-colors shadow-2xs hover:border-charcoal"
+            title="Full screen contingency analysis (F)"
+            aria-label="Full screen contingency analysis"
+          >
+            <Maximize2 className="w-3.5 h-3.5 text-charcoal" />
+            <span>Full screen (F)</span>
           </button>
         </div>
       </div>
@@ -439,12 +542,217 @@ export const LiveDemo: React.FC = () => {
         </div>
       )}
 
-      {/* 3D Scene Stage Wrapper */}
-      <div className="relative rounded-none border border-[#e5e7eb] shadow-sm bg-soft">
-        <StageScene />
+      {/* Contingency Analysis Area Wrapper (supports Fullscreen API + CSS fallback) */}
+      <div
+        ref={contingencyContainerRef}
+        className={
+          isFallbackFullscreen
+            ? 'fixed inset-0 z-[100] bg-soft flex flex-col w-screen h-screen overflow-hidden'
+            : isFullscreen
+            ? 'bg-soft flex flex-col w-full h-full overflow-hidden'
+            : 'relative mt-2'
+        }
+      >
+        {/* Fullscreen Compact Merged Single HUD */}
+        {(isFullscreen || isFallbackFullscreen) && (
+          <div className="z-30 bg-white/95 backdrop-blur-md border-b border-[#cfd3d8] px-4 py-2 flex flex-wrap items-center justify-between gap-2.5 shadow-sm select-none shrink-0">
+            {/* Left Controls: View Mode, Labels, Topology/Voltage or Opacity, Risk */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center bg-[#f0f4f8] border border-[#cfd3d8] p-0.5">
+                {(['3d', 'map', 'city'] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setViewMode(m)}
+                    className={`px-2.5 py-1 text-xs font-medium transition-all ${
+                      viewMode === m ? 'bg-charcoal text-white shadow-2xs' : 'text-[#555] hover:text-ink'
+                    }`}
+                  >
+                    {m === '3d' ? '3D' : m === 'map' ? 'Map' : 'City'}
+                  </button>
+                ))}
+              </div>
 
-        {/* Collapsible Legend (Bottom-Left) */}
-        <div className="absolute left-4 bottom-4 z-20">
+              {/* Labels: Smart | All | Off */}
+              <div className="flex items-center bg-white border border-[#cfd3d8] p-0.5 text-xs">
+                <span className="px-2 py-0.5 text-[10px] uppercase font-mono tracking-wider text-[#666]">Labels</span>
+                {(['smart', 'all', 'off'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setLabelMode(mode)}
+                    className={`px-2 py-0.5 text-[11px] font-medium capitalize transition-all ${
+                      labelMode === mode ? 'bg-charcoal text-white shadow-2xs' : 'text-[#555] hover:text-ink'
+                    }`}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+
+              {/* Map View Extra Controls: Topology Overlays & Group by Voltage */}
+              {viewMode === 'map' && (
+                <>
+                  <div className="flex items-center gap-1 bg-white border border-[#cfd3d8] px-2 py-0.5 text-xs">
+                    <span className="text-[10px] uppercase font-mono tracking-wider text-[#666]">Topology:</span>
+                    {(['none', 'degree', 'betweenness', 'community', 'bridges'] as const).map((overlay) => (
+                      <button
+                        key={overlay}
+                        onClick={() => setTopologyOverlay(overlay)}
+                        className={`px-1.5 py-0.5 text-[10.5px] capitalize transition-colors ${
+                          topologyOverlay === overlay
+                            ? 'bg-charcoal text-white font-medium'
+                            : 'text-[#555] hover:text-ink'
+                        }`}
+                      >
+                        {overlay === 'community' ? 'Clusters' : overlay}
+                      </button>
+                    ))}
+                  </div>
+
+                  {uniqueVoltages.length >= 2 && (
+                    <label className="flex items-center gap-1.5 bg-white border border-[#cfd3d8] px-2 py-1 text-xs text-[#555] cursor-pointer hover:text-ink">
+                      <input
+                        type="checkbox"
+                        checked={groupByVoltage}
+                        onChange={(e) => setGroupByVoltage(e.target.checked)}
+                        className="accent-charcoal cursor-pointer"
+                      />
+                      <span className="text-[11px] font-medium">Group by voltage</span>
+                    </label>
+                  )}
+                </>
+              )}
+
+              {/* City View Extra Controls: Buildings Opacity & Structures */}
+              {viewMode === 'city' && (
+                <div className="flex items-center gap-2 bg-white border border-[#cfd3d8] px-2.5 py-1 text-xs">
+                  <span className="text-[10px] uppercase font-mono tracking-wider text-[#666]">Opacity</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={buildingsOpacity}
+                    onChange={(e) => setBuildingsOpacity(Number(e.target.value))}
+                    className="w-16 h-1.5 accent-charcoal cursor-pointer"
+                    title={`Buildings opacity: ${buildingsOpacity}%`}
+                  />
+                  <span className="text-[10px] font-mono text-charcoal w-6 text-right">{buildingsOpacity}%</span>
+                  <label className="flex items-center gap-1 pl-1.5 border-l border-[#cfd3d8] cursor-pointer text-[10px] text-[#555] hover:text-ink">
+                    <input
+                      type="checkbox"
+                      checked={applyToStructures}
+                      onChange={(e) => setApplyToStructures(e.target.checked)}
+                      className="accent-charcoal cursor-pointer rounded-xs"
+                    />
+                    <span>Structures</span>
+                  </label>
+                </div>
+              )}
+
+              <label className="flex items-center gap-1 text-xs text-[#555] bg-white px-2 py-1 border border-[#cfd3d8] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showBusNumbers}
+                  onChange={toggleShowBusNumbers}
+                  className="accent-charcoal cursor-pointer"
+                />
+                <span>Bus #</span>
+              </label>
+
+              <div className="flex items-center gap-1.5 bg-white px-2 py-1 border border-[#cfd3d8] text-xs font-mono">
+                <span className="text-[#666]">Risk:</span>
+                <span className="font-bold text-ink">{formatProbability(rawProb)}</span>
+                <span className={`px-1.5 py-0.2 text-[10px] font-bold uppercase ${riskColor}`}>
+                  {alertLevel}
+                </span>
+              </div>
+            </div>
+
+            {/* Right Controls: Reset Cam, Load slider, Search, Assistant, Exit */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={triggerCameraReset}
+                className="px-2 py-1 text-xs border border-[#cfd3d8] bg-white text-[#555] hover:text-ink hover:border-charcoal flex items-center gap-1 transition-colors"
+                title="Reset scene camera angle"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset Cam</span>
+              </button>
+
+              <div className="flex items-center gap-1.5 text-xs bg-white px-2.5 py-1 border border-[#cfd3d8]">
+                <span className="text-[#666] text-[11px]">Load:</span>
+                <input
+                  type="range"
+                  min="60"
+                  max="120"
+                  step="1"
+                  value={sliderVal}
+                  onChange={handleSliderChange}
+                  className="w-16 accent-charcoal cursor-pointer"
+                />
+                <span className="font-mono font-semibold text-ink text-[11px]">{sliderVal}%</span>
+              </div>
+
+              <div className="relative w-36">
+                <input
+                  type="text"
+                  placeholder="Search line #..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setIsSearchOpen(true);
+                  }}
+                  onFocus={() => setIsSearchOpen(true)}
+                  className="w-full text-xs px-2 py-1 border border-[#cfd3d8] bg-white text-ink placeholder:text-[#999]"
+                />
+                {isSearchOpen && searchResults.length > 0 && (
+                  <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-charcoal shadow-lg max-h-48 overflow-y-auto">
+                    {searchResults.map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => {
+                          toggleOutagedElement(item.id);
+                          setSearchQuery('');
+                          setIsSearchOpen(false);
+                        }}
+                        className="px-2 py-1 text-xs hover:bg-[#f0f4f8] cursor-pointer flex items-center justify-between"
+                      >
+                        <span>{item.label}</span>
+                        {item.isOut && <span className="text-red font-bold text-[10px]">OUT</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Grid Assistant button */}
+              <button
+                onClick={() => useGridStore.getState().toggleChat()}
+                className="btn-estate-dark py-1 px-2.5 text-xs flex items-center gap-1 hover:bg-black"
+                title="Open Grid Assistant Chat"
+              >
+                <Bot className="w-3.5 h-3.5 text-amber" />
+                <span>Assistant</span>
+              </button>
+
+              {/* Exit Fullscreen button */}
+              <button
+                onClick={exitFullscreen}
+                className="px-2.5 py-1 border border-[#cfd3d8] bg-white text-ink text-xs font-medium hover:bg-[#fee2e2] hover:border-red flex items-center gap-1 transition-colors"
+                title="Exit full screen (Esc)"
+              >
+                <Minimize2 className="w-3.5 h-3.5" />
+                <span>Exit (Esc)</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 3D Scene Stage Wrapper */}
+        <div className={`relative ${isFullscreen || isFallbackFullscreen ? 'flex-1 min-h-0' : 'rounded-none border border-[#e5e7eb] shadow-sm bg-soft'}`}>
+          <StageScene isFullscreen={isFullscreen || isFallbackFullscreen} />
+
+        {/* Collapsible Legend (Bottom-Right, does not overlap bottom captions) */}
+        <div className="absolute right-4 bottom-4 z-20">
           <div className="bg-white/95 backdrop-blur-md border border-[#cfd3d8] shadow-md transition-all rounded-none">
             <button
               onClick={() => setIsLegendOpen(!isLegendOpen)}
@@ -607,7 +915,7 @@ export const LiveDemo: React.FC = () => {
             <span className="text-xs text-[#888] italic">Click any line or generator to take it out</span>
           ) : (
             outagedElements.map((el) => {
-              const label = el.replace('_', ' ').toUpperCase();
+              const label = formatBranchName(el, branches);
               return (
                 <span
                   key={el}
@@ -706,157 +1014,44 @@ export const LiveDemo: React.FC = () => {
         </div>
       </div>
 
-      {/* Control Strip: System Load Slider & Ground Truth Cascade Simulator Deck */}
-      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-[#fbfbfb] border border-[#e5e7eb]">
-        {/* Load Slider */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <label htmlFor="load-slider" className="eyebrow flex items-center gap-1.5">
-              <Sliders className="w-3.5 h-3.5" />
-              System Load Multiplier
-            </label>
-            <span className="text-xs font-semibold font-mono text-ink bg-white px-2 py-0.5 border border-[#cfd3d8]">
-              {sliderVal}%
-            </span>
-          </div>
-          <input
-            id="load-slider"
-            type="range"
-            min="60"
-            max="120"
-            step="1"
-            value={sliderVal}
-            onChange={handleSliderChange}
-            className="w-full accent-charcoal cursor-pointer"
-          />
-          <div className="flex justify-between text-[10.5px] text-[#888] font-mono">
-            <span>60% (Off-Peak)</span>
-            <span>100% (Nominal)</span>
-            <span>120% (Peak Stress)</span>
-          </div>
-        </div>
-
-        {/* Quasi-Dynamic Cascade Simulator Deck */}
-        <div className="border border-[#e5e7eb] p-3 bg-white space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="eyebrow flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-amber" /> Quasi-Dynamic Cascade Replay
-            </span>
-            {replayData && (
-              <span className="text-[11px] font-mono text-[#666]">
-                Step {replayStepIndex + 1}/{replayData.total_steps}
-              </span>
-            )}
-          </div>
-
-          {!replayData ? (
-            <button
-              onClick={startCascadeReplay}
-              disabled={loadingReplay}
-              className="btn-estate-dark w-full flex items-center justify-center gap-2 text-xs py-2"
-            >
-              {loadingReplay ? 'Simulating Cascade Trajectory...' : 'Run Quasi-Dynamic Cascade Simulation'}
-            </button>
-          ) : (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={togglePlayPauseReplay}
-                  className="btn-estate-dark flex-1 py-1 text-xs flex items-center justify-center gap-1.5"
-                >
-                  {isPlayingReplay ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                  <span>{isPlayingReplay ? 'Pause' : 'Resume'}</span>
-                </button>
-                <button
-                  onClick={startCascadeReplay}
-                  className="border border-[#cfd3d8] bg-white px-2 py-1 text-xs text-[#555] hover:text-ink"
-                  title="Restart simulation"
-                >
-                  <RotateCw className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={stopCascadeReplay}
-                  className="border border-[#cfd3d8] bg-white px-2.5 py-1 text-xs text-[#555] hover:text-red"
-                  title="Exit replay mode"
-                >
-                  Exit
-                </button>
+        {/* Load Slider & Cascade Replay Panel */}
+        <div className={isFullscreen || isFallbackFullscreen ? 'border-t border-[#cfd3d8] bg-white p-3 z-30 max-h-[36vh] overflow-y-auto shadow-md shrink-0' : 'mt-4 space-y-4'}>
+          {!(isFullscreen || isFallbackFullscreen) && (
+            <div className="p-4 bg-[#fbfbfb] border border-[#e5e7eb]">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="load-slider" className="eyebrow flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5" />
+                    System Load Multiplier
+                  </label>
+                  <span className="text-xs font-semibold font-mono text-ink bg-white px-2 py-0.5 border border-[#cfd3d8]">
+                    {sliderVal}%
+                  </span>
+                </div>
+                <input
+                  id="load-slider"
+                  type="range"
+                  min="60"
+                  max="120"
+                  step="1"
+                  value={sliderVal}
+                  onChange={handleSliderChange}
+                  className="w-full accent-charcoal cursor-pointer"
+                />
+                <div className="flex justify-between text-[10.5px] text-[#888] font-mono">
+                  <span>60% (Off-Peak)</span>
+                  <span>100% (Nominal)</span>
+                  <span>120% (Peak Stress)</span>
+                </div>
               </div>
-
-              {/* Step Slider */}
-              <input
-                type="range"
-                min="0"
-                max={replayData.total_steps - 1}
-                value={replayStepIndex}
-                onChange={(e) => setReplayStepIndex(parseInt(e.target.value, 10))}
-                className="w-full accent-charcoal cursor-pointer"
-              />
-
-              <p className="text-[11px] text-ink font-mono bg-[#f9fafb] p-1.5 border border-[#e5e7eb] leading-tight">
-                {replayData.steps[replayStepIndex]?.description || 'Cascade step trajectory in progress...'}
-              </p>
             </div>
           )}
+
+          <ErrorBoundary sectionName="Cascade Replay">
+            <CascadeReplayPanel branches={branches} />
+          </ErrorBoundary>
         </div>
       </div>
-
-      {/* Cascade Replay Outcome Card (After Replay Completes or during Replay) */}
-      {replayData && (
-        <div className="mt-4 p-4 border border-[#cfd3d8] bg-[#fdfdfd] space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#e5e7eb] pb-2">
-            <div>
-              <p className="eyebrow">Ground Truth vs GINE Early Warning Comparison</p>
-              <h4 className="text-sm font-semibold text-ink">
-                Cascade Trajectory Validation Outcome
-              </h4>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {isReplayComplete ? (
-                predictionWasCorrect ? (
-                  <span className="px-2.5 py-1 bg-[#dcfce7] border border-[#bbf7d0] text-[#166534] text-xs font-semibold flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Accurate Early Warning
-                  </span>
-                ) : (
-                  <span className="px-2.5 py-1 bg-amber/10 border border-amber/30 text-amber text-xs font-semibold flex items-center gap-1">
-                    <AlertTriangle className="w-3.5 h-3.5" /> Divergent Outcome
-                  </span>
-                )
-              ) : (
-                <span className="px-2 py-0.5 bg-[#f0f4f8] text-[#555] text-xs font-mono">
-                  Simulating...
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div>
-              <span className="text-[#666] block">GINE Prediction</span>
-              <span className="font-semibold text-ink font-mono">
-                {prob}% ({alertLevel} Risk)
-              </span>
-            </div>
-            <div>
-              <span className="text-[#666] block">Physical Outcome</span>
-              <span className="font-semibold text-ink font-mono">
-                {actualCascadeOccurred ? 'Cascade Triggered' : 'Stable Operating State'}
-              </span>
-            </div>
-            <div>
-              <span className="text-[#666] block">Additional Trips</span>
-              <span className="font-semibold text-ink font-mono">{replayData.additional_trips} lines</span>
-            </div>
-            <div>
-              <span className="text-[#666] block">Final Load Shed</span>
-              <span className="font-semibold text-ink font-mono">
-                {(replayData.final_load_shed_fraction * 100).toFixed(1)}% ({replayData.final_load_shed_mw} MW)
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* THREE TABS UNDER THE SCENE: Warning (default), Why, Grid stats */}
       <div className="mt-8">
@@ -921,122 +1116,128 @@ export const LiveDemo: React.FC = () => {
 
         {/* TAB 1: WARNING (Default) */}
         {activeTab === 'warning' && (
-          <div className="pt-6 grid grid-cols-1 md:grid-cols-[1.2fr_1fr] gap-8 items-start">
-            {/* Risk Number & Narrative */}
-            <div className="space-y-4">
-              <div>
-                <p className="eyebrow mb-1">GINE Predicted Cascade Risk</p>
-                <div className="flex flex-wrap items-baseline gap-4">
-                  <div className="text-[64px] font-semibold leading-none tracking-tight text-ink">
-                    {loadingPredict ? (
-                      <span className="text-[#999] animate-pulse">...</span>
-                    ) : (
-                      `${prob}%`
+          <ErrorBoundary sectionName="Early Warning">
+            <div className="pt-6 grid grid-cols-1 md:grid-cols-[1.2fr_1fr] gap-8 items-start">
+              {/* Risk Number & Narrative */}
+              <div className="space-y-4">
+                <div>
+                  <p className="eyebrow mb-1">GINE Predicted Cascade Risk</p>
+                  <div className="flex flex-wrap items-baseline gap-4">
+                    <div className="text-[64px] font-semibold leading-none tracking-tight text-ink">
+                      {loadingPredict ? (
+                        <span className="text-[#999] animate-pulse">...</span>
+                      ) : (
+                        formatProbability(rawProb)
+                      )}
+                      <small className={`block text-[16px] font-semibold mt-2 ${riskColor}`}>
+                        {alertLevel} Risk
+                      </small>
+                    </div>
+
+                    {prediction?.uncertainty && (
+                      <div className="bg-[#f8fafc] px-3 py-2 border border-[#cfd3d8] text-xs font-mono shadow-2xs">
+                        <span className="eyebrow block text-[9.5px] text-[#666]">Uncertainty CI 95%</span>
+                        <span className="font-semibold text-ink text-sm">
+                          {formatPercent(prediction.uncertainty.ci_95_low * 100, 0)} – {formatPercent(prediction.uncertainty.ci_95_high * 100, 0)}
+                        </span>
+                        <span className="block text-[10px] text-[#777] mt-0.5">
+                          std dev: ±{formatPercent(prediction.uncertainty.standard_deviation * 100, 1)}
+                        </span>
+                      </div>
                     )}
-                    <small className={`block text-[16px] font-semibold mt-2 ${riskColor}`}>
-                      {alertLevel} Risk
-                    </small>
                   </div>
-
-                  {prediction?.uncertainty && (
-                    <div className="bg-[#f8fafc] px-3 py-2 border border-[#cfd3d8] text-xs font-mono shadow-2xs">
-                      <span className="eyebrow block text-[9.5px] text-[#666]">Uncertainty CI 95%</span>
-                      <span className="font-semibold text-ink text-sm">
-                        {Math.round(prediction.uncertainty.ci_95_low * 100)}% – {Math.round(prediction.uncertainty.ci_95_high * 100)}%
-                      </span>
-                      <span className="block text-[10px] text-[#777] mt-0.5">
-                        std dev: ±{(prediction.uncertainty.standard_deviation * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Narrative Sentence */}
-              <p className="text-[13.5px] text-[#444] leading-relaxed bg-[#fbfbfb] p-3 border border-[#e5e7eb]">
-                {prediction?.narrative ||
-                  'Initial disturbance operates within normal limits. Contingency load flow redistributes safely across parallel circuits.'}
-              </p>
-
-              {/* Confidence Margin & Second Opinion */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2">
-                <div className="border border-[#e5e7eb] p-3 bg-white">
-                  <span className="eyebrow block mb-1">Confidence Margin</span>
-                  <div className="font-semibold text-ink font-mono text-sm">
-                    ± {((prediction?.confidence_margin ?? 0.042) * 100).toFixed(1)}%
-                  </div>
-                  <span className="text-[11px] text-[#777] block mt-0.5">
-                    Threshold: {((prediction?.operating_threshold ?? 0.5) * 100).toFixed(0)}%
-                  </span>
                 </div>
 
-                <div className="border border-[#e5e7eb] p-3 bg-white">
-                  <span className="eyebrow block mb-1">XGBoost Second Opinion</span>
-                  {prediction?.second_opinion ? (
-                    <div>
-                      <span className="font-semibold text-ink font-mono text-sm">
-                        {Math.round(prediction.second_opinion.probability * 100)}% Risk
-                      </span>
-                      <span className="text-[11px] text-[#777] block mt-0.5">
-                        {prediction.second_opinion.agrees ? 'XGBoost agrees with GINE' : 'XGBoost diverges from GINE'}
-                      </span>
-                    </div>
-                  ) : (
-                    <span className="text-[#888]">Evaluating baseline model...</span>
-                  )}
-                </div>
-              </div>
-
-              {/* OOD Reliability Notice Badge */}
-              {isOod && (
-                <div className="relative mt-2 p-3 bg-[#fffbeb] border border-[#fef3c7] text-[#92400e] text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold flex items-center gap-1.5">
-                      <AlertTriangle className="w-4 h-4 text-amber shrink-0" />
-                      Outside the range this model was trained on. Treat this prediction as less reliable.
-                    </span>
-                    <button
-                      onClick={() => setShowOodPopover(!showOodPopover)}
-                      className="underline text-[11px] font-medium ml-2 hover:text-ink shrink-0"
-                    >
-                      {showOodPopover ? 'Hide reasons' : 'View reasons'}
-                    </button>
-                  </div>
-
-                  {showOodPopover && oodStatus && (
-                    <div className="mt-2 pt-2 border-t border-[#fde68a] text-[11px] space-y-1">
-                      <p className="font-semibold">Evaluated out-of-distribution metrics:</p>
-                      <ul className="list-disc pl-4 space-y-0.5 font-mono">
-                        {(oodStatus.reasons || []).map((r, i) => (
-                          <li key={i}>{r}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Mini What-If Chart */}
-            <div className="space-y-4">
-              <MiniWhatIfChart />
-
-              <div className="bg-[#fafafa] border border-[#e5e7eb] p-3 text-xs text-[#666] space-y-1">
-                <span className="eyebrow block mb-0.5">Operating Guideline</span>
-                <p className="text-[11.5px] leading-relaxed">
-                  Contingency risk climbs exponentially beyond 105% system load. Use the load scale slider to observe
-                  how operating margins degrade before taking elements out of service.
+                {/* Narrative Sentence */}
+                <p className="text-[13.5px] text-[#444] leading-relaxed bg-[#fbfbfb] p-3 border border-[#e5e7eb]">
+                  {prediction?.narrative ||
+                    'Initial disturbance operates within normal limits. Contingency load flow redistributes safely across parallel circuits.'}
                 </p>
+
+                {/* Confidence Margin & Second Opinion */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2">
+                  <div className="border border-[#e5e7eb] p-3 bg-white">
+                    <span className="eyebrow block mb-1">Confidence Margin</span>
+                    <div className="font-semibold text-ink font-mono text-sm">
+                      ± {formatPercent((prediction?.confidence_margin ?? 0.042) * 100, 1)}
+                    </div>
+                    <span className="text-[11px] text-[#777] block mt-0.5">
+                      Threshold: {formatPercent(canonicalThreshold * 100, 0)}
+                    </span>
+                  </div>
+
+                  <div className="border border-[#e5e7eb] p-3 bg-white">
+                    <span className="eyebrow block mb-1">XGBoost Second Opinion</span>
+                    {prediction?.second_opinion ? (
+                      <div>
+                        <span className="font-semibold text-ink font-mono text-sm">
+                          {Math.round(prediction.second_opinion.probability * 100)}% Risk
+                        </span>
+                        <span className="text-[11px] text-[#777] block mt-0.5">
+                          {prediction.second_opinion.agrees ? 'XGBoost agrees with GINE' : 'XGBoost diverges from GINE'}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-[#888]">Evaluating baseline model...</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* OOD Reliability Notice Badge */}
+                {isOod && (
+                  <div className="relative mt-2 p-3 bg-[#fffbeb] border border-[#fef3c7] text-[#92400e] text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-amber shrink-0" />
+                        Outside the range this model was trained on. Treat this prediction as less reliable.
+                      </span>
+                      <button
+                        onClick={() => setShowOodPopover(!showOodPopover)}
+                        className="underline text-[11px] font-medium ml-2 hover:text-ink shrink-0"
+                      >
+                        {showOodPopover ? 'Hide reasons' : 'View reasons'}
+                      </button>
+                    </div>
+
+                    {showOodPopover && oodStatus && (
+                      <div className="mt-2 pt-2 border-t border-[#fde68a] text-[11px] space-y-1">
+                        <p className="font-semibold">Evaluated out-of-distribution metrics:</p>
+                        <ul className="list-disc pl-4 space-y-0.5 font-mono">
+                          {(oodStatus.reasons || []).map((r, i) => (
+                            <li key={i}>{r}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Mini What-If Chart */}
+              <div className="space-y-4">
+                <MiniWhatIfChart />
+
+                <div className="bg-[#fafafa] border border-[#e5e7eb] p-3 text-xs text-[#666] space-y-1">
+                  <span className="eyebrow block mb-0.5">Operating Guideline</span>
+                  <p className="text-[11.5px] leading-relaxed">
+                    Contingency risk climbs exponentially beyond 105% system load. Use the load scale slider to observe
+                    how operating margins degrade before taking elements out of service.
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
+          </ErrorBoundary>
         )}
 
         {/* TAB 2: WHY (Attribution, Counterfactuals & Physical Breakdown) */}
         {activeTab === 'why' && (
-          <div className="pt-6 space-y-6">
-            {/* 1. Counterfactual Card: Smallest change that makes this outage safe */}
-            {prediction?.counterfactual ? (
+          <ErrorBoundary sectionName="Attribution & Why Analysis">
+            <div className="pt-6 space-y-6">
+            {/* 1. Suggested Fix / Counterfactual Card */}
+            <SuggestedFixCard />
+
+            {/* Legacy fallback if SuggestedFix not yet loaded */}
+            {!useGridStore.getState().suggestedFix && prediction?.counterfactual ? (
               <div className="p-4 border border-[#cfd3d8] bg-[#fafafa] space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#e5e7eb] pb-2">
                   <div>
@@ -1139,10 +1340,11 @@ export const LiveDemo: React.FC = () => {
                   {prediction?.top_influential_branches && prediction.top_influential_branches.length > 0 ? (
                     prediction.top_influential_branches.map((br) => {
                       const pct = Math.round(br.importance * 100);
+                      const branchDisplayName = br.name || formatBranchName(br.branch_id, branches);
                       return (
                         <div key={br.branch_id} className="space-y-1">
                           <div className="flex justify-between text-xs text-ink font-medium">
-                            <span>{br.name || `Line ${br.branch_id}`}</span>
+                            <span>{branchDisplayName}</span>
                             <span className="font-mono text-[#666]">
                               {pct}% saliency · {br.loading_percent.toFixed(0)}% loaded
                             </span>
@@ -1365,7 +1567,7 @@ export const LiveDemo: React.FC = () => {
                           ]).map((br) => (
                             <div key={br.branch_id} className="space-y-0.5">
                               <div className="flex justify-between text-[11px] font-mono">
-                                <span>{br.name || `Line ${br.branch_id}`}</span>
+                                <span>{br.name || formatBranchName(br.branch_id, branches)}</span>
                                 <span className="text-[#666]">{br.importance_frequency_pct}% test frequency</span>
                               </div>
                               <div className="h-1.5 bg-[#e5e7eb] w-full">
@@ -1481,11 +1683,13 @@ export const LiveDemo: React.FC = () => {
               </div>
             </div>
           </div>
+          </ErrorBoundary>
         )}
 
         {/* TAB 3: GRID STATS */}
         {activeTab === 'stats' && (
-          <div className="pt-6 space-y-6">
+          <ErrorBoundary sectionName="Grid Statistics">
+            <div className="pt-6 space-y-6">
             {/* Electrical Summary Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
               <div className="border border-[#e5e7eb] p-3 bg-white">
@@ -1585,14 +1789,21 @@ export const LiveDemo: React.FC = () => {
               </div>
             </div>
           </div>
+          </ErrorBoundary>
         )}
 
         {/* TAB 4: DATA (Dataset Inspector) */}
-        {activeTab === 'data' && <DatasetInspector />}
+        {activeTab === 'data' && (
+          <ErrorBoundary sectionName="Dataset Inspector">
+            <DatasetInspector />
+          </ErrorBoundary>
+        )}
       </div>
 
       {/* Floating Grid Assistant Chat Drawer */}
-      <ChatDrawer />
+      <ErrorBoundary sectionName="Grid Assistant Chatbot">
+        <ChatDrawer />
+      </ErrorBoundary>
     </section>
   );
 };

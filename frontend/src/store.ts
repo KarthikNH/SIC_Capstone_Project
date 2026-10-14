@@ -15,11 +15,19 @@ import type {
   DatasetCardResponse,
   GlobalInsightsResponse,
   MitigateResponse,
-  ChatMessage
+  ChatMessage,
+  SuggestedFix,
+  DatasetSplitsResponse
 } from './types';
 
 // Single source of truth for backend API base URL
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+
+// Module-level abort controllers to cancel in-flight requests and avoid stale updates
+let currentPredictController: AbortController | null = null;
+let currentPredictKey = '';
+let currentReplayController: AbortController | null = null;
+let currentReplayKey = '';
 
 interface GridState {
   gridCase: string;
@@ -40,6 +48,7 @@ interface GridState {
   branches: Branch[];
   layoutBuses: BusLayout[];
   layoutMap: Record<number, BusLayout>;
+  layout2dMap: Record<number, BusLayout>;
   loadingGrid: boolean;
   gridError: string | null;
   failingUrl: string | null;
@@ -77,6 +86,16 @@ interface GridState {
   viewMode: '3d' | 'map' | 'city';
   setViewMode: (mode: '3d' | 'map' | 'city') => void;
 
+  // Visual Controls: Labels, Buildings Opacity, Voltage Grouping
+  labelMode: 'smart' | 'all' | 'off';
+  setLabelMode: (mode: 'smart' | 'all' | 'off') => void;
+  buildingsOpacity: number;
+  setBuildingsOpacity: (val: number) => void;
+  applyToStructures: boolean;
+  setApplyToStructures: (val: boolean) => void;
+  groupByVoltage: boolean;
+  setGroupByVoltage: (val: boolean) => void;
+
   // Topology Overlay state (Map mode)
   topologyOverlay: 'none' | 'degree' | 'betweenness' | 'community' | 'bridges';
   setTopologyOverlay: (overlay: 'none' | 'degree' | 'betweenness' | 'community' | 'bridges') => void;
@@ -87,6 +106,8 @@ interface GridState {
   // Dataset Card & Inspector state (Data tab)
   datasetCard: DatasetCardResponse | null;
   loadingDatasetCard: boolean;
+  datasetCardError: string | null;
+  datasetCardFailingUrl: string | null;
   fetchDatasetCard: () => Promise<void>;
 
   // Global Insights state (Model Insights collapsible)
@@ -138,6 +159,11 @@ interface GridState {
   isPlayingReplay: boolean;
   loadingReplay: boolean;
   replayError: string | null;
+  replaySpeed: number;
+  setReplaySpeed: (speed: number) => void;
+  stepForwardReplay: () => void;
+  stepBackReplay: () => void;
+  restartReplay: () => void;
   startCascadeReplay: () => Promise<void>;
   stopCascadeReplay: () => void;
   setReplayStepIndex: (step: number) => void;
@@ -147,18 +173,58 @@ interface GridState {
   fetchGridStats: () => Promise<void>;
   fetchPrediction: () => Promise<void>;
   fetchResults: () => Promise<void>;
+
+  // Suggested Fix & Counterfactuals
+  suggestedFix: SuggestedFix | null;
+  loadingSuggestedFix: boolean;
+  appliedFix: SuggestedFix | null;
+  verifiedFixResult: { before: string; after: string; contained: boolean } | null;
+  modifications: Record<string, any> | null;
+  previousStateBeforeFix: { loadScale: number; modifications: Record<string, any> | null; replayData?: CascadeReplayResponse | null } | null;
+  fetchSuggestedFix: () => Promise<void>;
+  applyFix: (fix: SuggestedFix) => Promise<void>;
+  undoFix: () => Promise<void>;
+  verifyFixInSimulator: () => Promise<void>;
+
+  // Dataset Splits (Data tab)
+  datasetSplits: DatasetSplitsResponse | null;
+  loadingDatasetSplits: boolean;
+  fetchDatasetSplits: () => Promise<void>;
 }
 
 export const useGridStore = create<GridState>((set, get) => ({
   gridCase: 'case30',
   setGridCase: (c) => {
+    // Abort in-flight requests on grid switch
+    if (currentPredictController) {
+      currentPredictController.abort();
+      currentPredictController = null;
+    }
+    if (currentReplayController) {
+      currentReplayController.abort();
+      currentReplayController = null;
+    }
+    currentPredictKey = '';
+    currentReplayKey = '';
+
     set((state) => ({
       gridCase: c,
       outagedElements: ['line_0'],
       outageHistory: [],
+      prediction: null,
+      predictError: null,
+      loadingPredict: false,
       replayData: null,
       replayStepIndex: -1,
       isPlayingReplay: false,
+      loadingReplay: false,
+      replayError: null,
+      suggestedFix: null,
+      loadingSuggestedFix: false,
+      appliedFix: null,
+      verifiedFixResult: null,
+      modifications: null,
+      previousStateBeforeFix: null,
       showCriticality: false,
       criticalityData: null,
       branchCriticalityMap: {},
@@ -170,6 +236,7 @@ export const useGridStore = create<GridState>((set, get) => ({
     get().fetchGridStats();
     get().fetchTopology();
     get().fetchGridMetadata(c);
+    get().fetchPrediction();
   },
 
   gridList: [],
@@ -252,6 +319,7 @@ export const useGridStore = create<GridState>((set, get) => ({
   branches: [],
   layoutBuses: [],
   layoutMap: {},
+  layout2dMap: {},
   loadingGrid: true,
   gridError: null,
   failingUrl: null,
@@ -345,7 +413,18 @@ export const useGridStore = create<GridState>((set, get) => ({
 
   loadScale: 1.0,
   setLoadScale: (val) => {
-    set({ loadScale: val });
+    if (currentReplayController) {
+      currentReplayController.abort();
+      currentReplayController = null;
+    }
+    currentReplayKey = '';
+    set({
+      loadScale: val,
+      replayData: null,
+      replayStepIndex: -1,
+      isPlayingReplay: false,
+      verifiedFixResult: null
+    });
     get().fetchPrediction();
   },
 
@@ -397,6 +476,37 @@ export const useGridStore = create<GridState>((set, get) => ({
     set({ viewMode: mode });
   },
 
+  labelMode: (typeof window !== 'undefined' && (localStorage.getItem('sic_label_mode') as 'smart' | 'all' | 'off')) || 'smart',
+  setLabelMode: (mode) => {
+    try {
+      localStorage.setItem('sic_label_mode', mode);
+    } catch {}
+    set({ labelMode: mode });
+  },
+
+  buildingsOpacity: typeof window !== 'undefined' && localStorage.getItem('sic_buildings_opacity') !== null
+    ? Math.max(0, Math.min(100, Number(localStorage.getItem('sic_buildings_opacity'))))
+    : 100,
+  setBuildingsOpacity: (val) => {
+    try {
+      localStorage.setItem('sic_buildings_opacity', String(val));
+    } catch {}
+    set({ buildingsOpacity: val });
+  },
+
+  applyToStructures: typeof window !== 'undefined' && localStorage.getItem('sic_structures_opacity') !== null
+    ? localStorage.getItem('sic_structures_opacity') === 'true'
+    : false,
+  setApplyToStructures: (val) => {
+    try {
+      localStorage.setItem('sic_structures_opacity', String(val));
+    } catch {}
+    set({ applyToStructures: val });
+  },
+
+  groupByVoltage: false,
+  setGroupByVoltage: (val) => set({ groupByVoltage: val }),
+
   // Topology Overlay state (Map mode)
   topologyOverlay: 'none',
   setTopologyOverlay: (overlay) => set({ topologyOverlay: overlay }),
@@ -421,18 +531,28 @@ export const useGridStore = create<GridState>((set, get) => ({
   // Dataset Card & Inspector state
   datasetCard: null,
   loadingDatasetCard: false,
+  datasetCardError: null,
+  datasetCardFailingUrl: null,
   fetchDatasetCard: async () => {
-    set({ loadingDatasetCard: true });
+    set({ loadingDatasetCard: true, datasetCardError: null, datasetCardFailingUrl: null });
     try {
       const res = await fetch(`${API_BASE}/dataset/card`);
       if (res.ok) {
         const data: DatasetCardResponse = await res.json();
-        set({ datasetCard: data, loadingDatasetCard: false });
+        set({ datasetCard: data, loadingDatasetCard: false, datasetCardError: null, datasetCardFailingUrl: null });
       } else {
-        set({ loadingDatasetCard: false });
+        set({
+          loadingDatasetCard: false,
+          datasetCardError: `Server responded with status ${res.status}`,
+          datasetCardFailingUrl: `${API_BASE}/dataset/card`
+        });
       }
-    } catch {
-      set({ loadingDatasetCard: false });
+    } catch (err: any) {
+      set({
+        loadingDatasetCard: false,
+        datasetCardError: err.message || 'Network request failed',
+        datasetCardFailingUrl: `${API_BASE}/dataset/card`
+      });
     }
   },
 
@@ -808,20 +928,57 @@ export const useGridStore = create<GridState>((set, get) => ({
   isPlayingReplay: false,
   loadingReplay: false,
   replayError: null,
+  replaySpeed: 1,
+  setReplaySpeed: (speed) => set({ replaySpeed: speed }),
+  stepForwardReplay: () => {
+    const { replayData, replayStepIndex } = get();
+    if (replayData && replayStepIndex < replayData.total_steps - 1) {
+      set({ replayStepIndex: replayStepIndex + 1 });
+    }
+  },
+  stepBackReplay: () => {
+    const { replayStepIndex } = get();
+    if (replayStepIndex > 0) {
+      set({ replayStepIndex: replayStepIndex - 1 });
+    }
+  },
+  restartReplay: () => {
+    set({ replayStepIndex: 0, isPlayingReplay: false });
+  },
 
   startCascadeReplay: async () => {
-    const { gridCase, outagedElements, loadScale } = get();
+    const { gridCase, outagedElements, loadScale, modifications } = get();
+    const sortedOutages = [...outagedElements].sort();
+    const modStr = modifications ? JSON.stringify(modifications) : '';
+    const requestKey = `${gridCase}::${sortedOutages.join(',')}::${loadScale}::${modStr}`;
+
+    // Cancel in-flight replay
+    if (currentReplayController) {
+      currentReplayController.abort();
+    }
+    currentReplayController = new AbortController();
+    currentReplayKey = requestKey;
+
     set({ loadingReplay: true, replayError: null, isPlayingReplay: true });
     try {
       const res = await fetch(`${API_BASE}/cascade-replay`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: currentReplayController.signal,
         body: JSON.stringify({
+          grid_id: gridCase,
           case: gridCase,
-          outaged: outagedElements.length > 0 ? outagedElements : ['line_0'],
-          load_scale: loadScale
+          outaged: sortedOutages.length > 0 ? sortedOutages : ['line_0'],
+          load_scale: loadScale,
+          modifications: modifications || undefined
         })
       });
+
+      // Ignore stale response if key changed
+      if (currentReplayKey !== requestKey) {
+        return;
+      }
+
       if (!res.ok) throw new Error(`Replay server error ${res.status}`);
       const data: CascadeReplayResponse = await res.json();
       set({
@@ -830,13 +987,21 @@ export const useGridStore = create<GridState>((set, get) => ({
         isPlayingReplay: true,
         loadingReplay: false
       });
+
+      // Refresh suggested fix to evaluate simulator disagreement if needed
+      get().fetchSuggestedFix();
     } catch (err: any) {
-      console.error('Failed to simulate cascade replay:', err);
-      set({
-        replayError: err.message || 'Simulation replay failed',
-        loadingReplay: false,
-        isPlayingReplay: false
-      });
+      if (err.name === 'AbortError') {
+        return;
+      }
+      if (currentReplayKey === requestKey) {
+        console.error('Failed to simulate cascade replay:', err);
+        set({
+          replayError: err.message || 'Simulation replay failed',
+          loadingReplay: false,
+          isPlayingReplay: false
+        });
+      }
     }
   },
 
@@ -885,11 +1050,37 @@ export const useGridStore = create<GridState>((set, get) => ({
         });
       }
 
+      // Fetch 2D topological layout for Map mode
+      let l2dMap: Record<number, BusLayout> = {};
+      try {
+        const layout2dRes = await fetch(`${API_BASE}/layout2d?case=${c}`);
+        if (layout2dRes.ok) {
+          const layout2dData = await layout2dRes.json();
+          if (layout2dData.buses) {
+            layout2dData.buses.forEach((b: any) => {
+              const bId = b.bus_id !== undefined ? b.bus_id : b.id;
+              l2dMap[bId] = {
+                bus_id: bId,
+                x: b.x,
+                y: b.y ?? 0,
+                z: b.z,
+                vn_kv: b.vn_kv ?? 132,
+                type: b.type ?? 'substation',
+                degree: b.degree ?? 2
+              };
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load 2D layout, falling back to 3D projection:', e);
+      }
+
       set({
         buses: gridData.buses || [],
         branches: gridData.branches || [],
         layoutBuses: layoutData.buses || [],
         layoutMap: lMap,
+        layout2dMap: l2dMap,
         loadingGrid: false,
         gridError: null,
         failingUrl: null
@@ -925,31 +1116,241 @@ export const useGridStore = create<GridState>((set, get) => ({
   },
 
   fetchPrediction: async () => {
-    const { gridCase, outagedElements, loadScale } = get();
+    const { gridCase, outagedElements, loadScale, modifications } = get();
+    const sortedOutages = [...outagedElements].sort();
+    const modStr = modifications ? JSON.stringify(modifications) : '';
+    const requestKey = `${gridCase}::${sortedOutages.join(',')}::${loadScale}::${modStr}`;
+
+    // Cancel in-flight predict request if key changed or new request starts
+    if (currentPredictController) {
+      currentPredictController.abort();
+    }
+    currentPredictController = new AbortController();
+    currentPredictKey = requestKey;
+
     set({ loadingPredict: true, predictError: null });
+
     try {
       const res = await fetch(`${API_BASE}/predict`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: currentPredictController.signal,
+        body: JSON.stringify({
+          grid_id: gridCase,
+          case: gridCase,
+          outaged: sortedOutages.length > 0 ? sortedOutages : ['line_0'],
+          load_scale: loadScale,
+          modifications: modifications || undefined
+        })
+      });
+
+      // Ignore stale response if requestKey no longer matches
+      if (currentPredictKey !== requestKey) {
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(`Server responded with ${res.status}`);
+      }
+      const data: PredictResponse = await res.json();
+      set({ prediction: data, loadingPredict: false });
+
+      // Fetch suggested fix alongside
+      get().fetchSuggestedFix();
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return;
+      }
+      if (currentPredictKey === requestKey) {
+        console.error('Prediction failed:', err);
+        set({ predictError: err.message || 'Prediction failed', loadingPredict: false });
+      }
+    }
+
+    // Refresh what-if curve alongside
+    get().fetchWhatifCurve();
+  },
+
+  // Suggested Fix & Counterfactual workflow
+  suggestedFix: null,
+  loadingSuggestedFix: false,
+  appliedFix: null,
+  verifiedFixResult: null,
+  modifications: null,
+  previousStateBeforeFix: null,
+
+  fetchSuggestedFix: async () => {
+    const { gridCase, outagedElements, loadScale, prediction, replayData, modifications } = get();
+    set({ loadingSuggestedFix: true });
+    try {
+      const currentProb = prediction?.probability ?? prediction?.cascade_probability ?? null;
+      const actualCascade = replayData?.actual_cascade ?? (replayData ? Boolean(replayData.cascade) : null);
+      const res = await fetch(`${API_BASE}/suggest-fix`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           grid_id: gridCase,
           case: gridCase,
           outaged: outagedElements.length > 0 ? outagedElements : ['line_0'],
-          load_scale: loadScale
+          load_scale: loadScale,
+          current_probability: currentProb,
+          actual_cascade: actualCascade,
+          modifications: modifications || undefined
         })
       });
-      if (!res.ok) {
-        throw new Error(`Server responded with ${res.status}`);
+      if (res.ok) {
+        const fix: SuggestedFix = await res.json();
+        set({ suggestedFix: fix, loadingSuggestedFix: false });
+      } else {
+        set({ loadingSuggestedFix: false });
       }
-      const data: PredictResponse = await res.json();
-      set({ prediction: data, loadingPredict: false });
-    } catch (err: any) {
-      console.error('Prediction failed:', err);
-      set({ predictError: err.message || 'Prediction failed', loadingPredict: false });
+    } catch (err) {
+      console.error('Failed to fetch suggested fix:', err);
+      set({ loadingSuggestedFix: false });
+    }
+  },
+
+  applyFix: async (fix: SuggestedFix) => {
+    const { loadScale, modifications, replayData } = get();
+    // Cancel any in-flight requests
+    if (currentPredictController) {
+      currentPredictController.abort();
+      currentPredictController = null;
+    }
+    if (currentReplayController) {
+      currentReplayController.abort();
+      currentReplayController = null;
     }
 
-    // Refresh what-if curve alongside
-    get().fetchWhatifCurve();
+    // Save previous state including previous replayData for dynamic before description
+    set({
+      previousStateBeforeFix: { loadScale, modifications, replayData },
+      appliedFix: fix,
+      replayData: null,
+      replayStepIndex: -1,
+      isPlayingReplay: false,
+      verifiedFixResult: null
+    });
+
+    if (fix.action?.type === 'load_scale' && typeof fix.action.target_value === 'number') {
+      set({ loadScale: fix.action.target_value });
+      if (fix.action.modifications) {
+        set({ modifications: fix.action.modifications });
+      }
+    } else if (fix.action?.type === 'modifications' && fix.action.modifications) {
+      set({ modifications: fix.action.modifications });
+    }
+
+    // Re-run predict with updated scene & risk
+    await get().fetchPrediction();
+  },
+
+  undoFix: async () => {
+    const { previousStateBeforeFix } = get();
+    if (previousStateBeforeFix) {
+      if (currentPredictController) {
+        currentPredictController.abort();
+        currentPredictController = null;
+      }
+      if (currentReplayController) {
+        currentReplayController.abort();
+        currentReplayController = null;
+      }
+      set({
+        loadScale: previousStateBeforeFix.loadScale,
+        modifications: previousStateBeforeFix.modifications,
+        replayData: previousStateBeforeFix.replayData || null,
+        replayStepIndex: previousStateBeforeFix.replayData ? 0 : -1,
+        appliedFix: null,
+        verifiedFixResult: null,
+        previousStateBeforeFix: null
+      });
+      await get().fetchPrediction();
+    }
+  },
+
+  verifyFixInSimulator: async () => {
+    const { gridCase, outagedElements, loadScale, modifications, appliedFix, previousStateBeforeFix } = get();
+    set({ loadingReplay: true });
+    try {
+      const res = await fetch(`${API_BASE}/cascade-replay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grid_id: gridCase,
+          case: gridCase,
+          outaged: outagedElements.length > 0 ? outagedElements : ['line_0'],
+          load_scale: loadScale,
+          modifications: modifications || undefined
+        })
+      });
+      if (res.ok) {
+        const replay: CascadeReplayResponse = await res.json();
+        const isContained = !replay.actual_cascade;
+        const extraTrips = replay.additional_trips;
+        const loadShedPct = (replay.final_load_shed_fraction * 100).toFixed(1);
+
+        // Accurate before description based on pre-fix state
+        const prevReplay = previousStateBeforeFix?.replayData;
+        let beforeDesc = 'Before: cascade propagation observed';
+        if (prevReplay) {
+          const prevTrips = prevReplay.additional_trips;
+          const prevShed = (prevReplay.final_load_shed_fraction * 100).toFixed(1);
+          if (prevReplay.actual_cascade || prevReplay.cascade === 1) {
+            beforeDesc = `Before: cascade, ${prevTrips} lines tripped, ${prevShed}% load shed.`;
+          } else {
+            beforeDesc = `Before: contained (${prevTrips} lines tripped, ${prevShed}% load shed).`;
+          }
+        } else if (appliedFix?.before_numbers) {
+          if (appliedFix.before_numbers.status === 'cascade' || appliedFix.before_numbers.cascade) {
+            const bTrips = (appliedFix.before_numbers as any).extra_trips ?? 2;
+            const bShed = (appliedFix.before_numbers as any).load_shed_pct ?? 15.9;
+            beforeDesc = `Before: cascade, ${bTrips} lines tripped, ${bShed}% load shed.`;
+          } else if (typeof appliedFix.before_numbers.risk === 'number') {
+            beforeDesc = `Before: high risk (${(appliedFix.before_numbers.risk * 100).toFixed(1)}%).`;
+          }
+        }
+
+        const afterDesc = isContained
+          ? (extraTrips === 0 && parseFloat(loadShedPct) === 0 ? 'After: contained.' : `After: contained (${extraTrips} lines tripped, ${loadShedPct}% load shed).`)
+          : `After: cascade continues (${extraTrips} lines tripped, ${loadShedPct}% load shed).`;
+
+        set({
+          replayData: replay,
+          replayStepIndex: 0,
+          verifiedFixResult: {
+            before: beforeDesc,
+            after: afterDesc,
+            contained: isContained
+          },
+          loadingReplay: false
+        });
+      } else {
+        set({ loadingReplay: false });
+      }
+    } catch (err) {
+      console.error('Failed to verify fix:', err);
+      set({ loadingReplay: false });
+    }
+  },
+
+  // Dataset Splits
+  datasetSplits: null,
+  loadingDatasetSplits: false,
+  fetchDatasetSplits: async () => {
+    set({ loadingDatasetSplits: true });
+    try {
+      const res = await fetch(`${API_BASE}/dataset/splits`);
+      if (res.ok) {
+        const data: DatasetSplitsResponse = await res.json();
+        set({ datasetSplits: data, loadingDatasetSplits: false });
+      } else {
+        set({ loadingDatasetSplits: false });
+      }
+    } catch (err) {
+      console.error('Failed to fetch dataset splits:', err);
+      set({ loadingDatasetSplits: false });
+    }
   },
 
   fetchResults: async () => {

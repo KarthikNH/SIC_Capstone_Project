@@ -6,6 +6,7 @@ import { useGridStore } from '../store';
 import type { Bus, Branch, BusLayout } from '../types';
 import { Scissors, AlertTriangle, RotateCcw } from 'lucide-react';
 import { CityScene } from './CityScene';
+import { formatBranchName } from '../utils/probability';
 
 // Color Palette for Estate theme
 const COLOR_NORMAL = new THREE.Color('#9aa3ad');
@@ -52,7 +53,9 @@ const SceneCameraController: React.FC<{
   reducedMotion: boolean;
   viewMode: '3d' | 'map';
   gridRadius: number;
-}> = ({ cameraResetTrigger, shakeIntensity, reducedMotion, viewMode, gridRadius }) => {
+  gridCase?: string;
+  framingCentroid?: [number, number, number] | null;
+}> = ({ cameraResetTrigger, shakeIntensity, reducedMotion, viewMode, gridRadius, gridCase, framingCentroid }) => {
   const controlsRef = useRef<any>(null);
   const { camera } = useThree();
   const lastInteractionTime = useRef<number>(Date.now());
@@ -64,12 +67,32 @@ const SceneCameraController: React.FC<{
   const transitionStartTime = useRef<number>(0);
   const TRANSITION_DURATION = 0.55;
 
-  // Derive camera positions scaled to the grid bounding sphere radius
-  const r = Math.max(3.5, gridRadius);
-  const pos3D = useMemo(() => new THREE.Vector3(0, r * 0.32, r * 1.05), [r]);
-  const posMap = useMemo(() => new THREE.Vector3(0, r * 1.45, 0.001), [r]);
+  // Gentle framing toward newly affected lines (cancelable by user interaction)
+  const prevCentroidRef = useRef<[number, number, number] | null>(null);
+  useEffect(() => {
+    if (reducedMotion || !framingCentroid || isUserInteracting.current) return;
+    if (
+      prevCentroidRef.current &&
+      prevCentroidRef.current[0] === framingCentroid[0] &&
+      prevCentroidRef.current[1] === framingCentroid[1] &&
+      prevCentroidRef.current[2] === framingCentroid[2]
+    ) {
+      return;
+    }
+    prevCentroidRef.current = framingCentroid;
+    if (controlsRef.current) {
+      const targetV = new THREE.Vector3(...framingCentroid);
+      controlsRef.current.target.lerp(targetV, 0.45);
+      controlsRef.current.update();
+    }
+  }, [framingCentroid, reducedMotion]);
 
-  // Explicit Reset Camera – snap to full-grid view, cancel any transition
+  // Derive camera positions scaled to the grid bounding sphere radius with ~10% padding
+  const r = Math.max(3.5, gridRadius);
+  const pos3D = useMemo(() => new THREE.Vector3(0, r * 0.72, r * 2.05), [r]);
+  const posMap = useMemo(() => new THREE.Vector3(0, r * 2.45, 0.001), [r]);
+
+  // Explicit Reset Camera or Grid Switch – snap to full-grid view with ~10% padding
   useEffect(() => {
     if (!controlsRef.current) return;
     const targetPos = viewMode === 'map' ? posMap : pos3D;
@@ -78,7 +101,7 @@ const SceneCameraController: React.FC<{
     controlsRef.current.update();
     transitionTarget.current = null;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraResetTrigger]);
+  }, [cameraResetTrigger, r, gridCase]);
 
   // viewMode change – start one-shot transition (no controls.reset())
   useEffect(() => {
@@ -272,6 +295,9 @@ interface BranchNetworkProps {
   branchCriticalityMap?: Record<number, number>;
   isBridgeMode?: boolean;
   bridgeBranchIds?: Set<number>;
+  newlyTrippedBranchIds?: Set<number>;
+  previouslyTrippedBranchIds?: Set<number>;
+  overloadedBranchIds?: Set<number>;
 }
 
 const BranchNetwork: React.FC<BranchNetworkProps> = ({
@@ -288,13 +314,16 @@ const BranchNetwork: React.FC<BranchNetworkProps> = ({
   showCriticality,
   branchCriticalityMap,
   isBridgeMode,
-  bridgeBranchIds
+  bridgeBranchIds,
+  newlyTrippedBranchIds,
+  previouslyTrippedBranchIds,
+  overloadedBranchIds,
 }) => {
   const particlesRef = useRef<THREE.Points>(null);
   const linesRef = useRef<THREE.LineSegments>(null);
 
   // Build broken and continuous line geometries
-  const { linePositions, lineColors, particleData, outagedMarkers } = useMemo(() => {
+  const { linePositions, lineColors, particleData, outagedMarkers, overloadedMarkers } = useMemo(() => {
     const pos: number[] = [];
     const cols: number[] = [];
     const pData: Array<{
@@ -304,21 +333,37 @@ const BranchNetwork: React.FC<BranchNetworkProps> = ({
       phase: number;
       color: THREE.Color;
     }> = [];
-    const markers: Array<{ id: number; name: string; mid: [number, number, number] }> = [];
+    const markers: Array<{
+      id: number;
+      name: string;
+      mid: [number, number, number];
+      isNewlyTripped?: boolean;
+      isPreviouslyTripped?: boolean;
+    }> = [];
+    const overMarkers: Array<{ id: number; name: string; mid: [number, number, number] }> = [];
 
     branches.forEach((br) => {
       const p1 = activeLayoutMap[br.from_bus];
       const p2 = activeLayoutMap[br.to_bus];
       if (!p1 || !p2) return;
 
-      const isOut = outagedLines.includes(br.id);
+      const isNewly = newlyTrippedBranchIds?.has(br.id) ?? false;
+      const isPrev = previouslyTrippedBranchIds?.has(br.id) ?? false;
+      const isOver = (overloadedBranchIds?.has(br.id) ?? false) && !isNewly && !isPrev;
+      const isOut = outagedLines.includes(br.id) || isNewly || isPrev;
       const isIso = isolatedBranches.has(br.id);
       const isHovered = hoveredBranchId === br.id;
       const isBridge = bridgeBranchIds?.has(br.id);
       const load = branchLoading[String(br.id)] ?? 35.0;
 
       let c: THREE.Color;
-      if (isOut) {
+      if (isNewly) {
+        c = new THREE.Color('#ef4444');
+      } else if (isPrev) {
+        c = new THREE.Color('#64748b');
+      } else if (isOver) {
+        c = new THREE.Color('#f59e0b');
+      } else if (isOut) {
         c = COLOR_OUTAGED.clone();
       } else if (isBridgeMode && isBridge) {
         c = COLOR_BRIDGE.clone();
@@ -337,12 +382,30 @@ const BranchNetwork: React.FC<BranchNetworkProps> = ({
         c = c.clone().offsetHSL(0, 0.2, 0.25);
       }
 
-      if (isOut) {
-        // BREAK IN THE MIDDLE: Two separate half-segments ending with visible gap
-        const midX = (p1.x + p2.x) * 0.5;
-        const midY = (p1.y + p2.y) * 0.5;
-        const midZ = (p1.z + p2.z) * 0.5;
+      const midX = (p1.x + p2.x) * 0.5;
+      const midY = (p1.y + p2.y) * 0.5;
+      const midZ = (p1.z + p2.z) * 0.5;
 
+      if (isPrev) {
+        // Dashed grey line for previously tripped lines
+        const nDash = 4;
+        for (let di = 0; di < nDash; di++) {
+          const t1 = (di * 2) / (nDash * 2);
+          const t2 = (di * 2 + 1) / (nDash * 2);
+          pos.push(
+            p1.x + (p2.x - p1.x) * t1, p1.y + (p2.y - p1.y) * t1, p1.z + (p2.z - p1.z) * t1,
+            p1.x + (p2.x - p1.x) * t2, p1.y + (p2.y - p1.y) * t2, p1.z + (p2.z - p1.z) * t2
+          );
+          cols.push(c.r, c.g, c.b, c.r, c.g, c.b);
+        }
+        markers.push({
+          id: br.id,
+          name: br.name || formatBranchName(br.from_bus, br.to_bus, 1),
+          mid: [midX, midY, midZ],
+          isPreviouslyTripped: true,
+        });
+      } else if (isOut) {
+        // BREAK IN THE MIDDLE: Two separate half-segments ending with visible gap
         const gap1X = p1.x + (midX - p1.x) * 0.75;
         const gap1Y = p1.y + (midY - p1.y) * 0.75;
         const gap1Z = p1.z + (midZ - p1.z) * 0.75;
@@ -363,14 +426,23 @@ const BranchNetwork: React.FC<BranchNetworkProps> = ({
 
         markers.push({
           id: br.id,
-          name: br.name || `Line ${br.from_bus}-${br.to_bus}`,
-          mid: [midX, midY, midZ]
+          name: br.name || formatBranchName(br.from_bus, br.to_bus, 1),
+          mid: [midX, midY, midZ],
+          isNewlyTripped: isNewly,
         });
       } else {
         // Continuous line
         pos.push(p1.x, p1.y, p1.z);
         pos.push(p2.x, p2.y, p2.z);
         cols.push(c.r, c.g, c.b, c.r, c.g, c.b);
+
+        if (isOver) {
+          overMarkers.push({
+            id: br.id,
+            name: br.name || formatBranchName(br.from_bus, br.to_bus, 1),
+            mid: [midX, midY, midZ],
+          });
+        }
 
         // Flow particles
         if (!reducedMotion && !isIso) {
@@ -390,7 +462,8 @@ const BranchNetwork: React.FC<BranchNetworkProps> = ({
       linePositions: new Float32Array(pos),
       lineColors: new Float32Array(cols),
       particleData: pData,
-      outagedMarkers: markers
+      outagedMarkers: markers,
+      overloadedMarkers: overMarkers,
     };
   }, [
     branches,
@@ -404,7 +477,10 @@ const BranchNetwork: React.FC<BranchNetworkProps> = ({
     branchCriticalityMap,
     glowInfluentialBranchIds,
     isBridgeMode,
-    bridgeBranchIds
+    bridgeBranchIds,
+    newlyTrippedBranchIds,
+    previouslyTrippedBranchIds,
+    overloadedBranchIds,
   ]);
 
   const particlePositions = useMemo(() => {
@@ -498,18 +574,175 @@ const BranchNetwork: React.FC<BranchNetworkProps> = ({
         );
       })}
 
-      {/* Outage Break Marker & Bold Red Labels */}
+      {/* Outage & Cascade Tripping Markers - Compact Pill, midpoint of line, no distance scaling */}
       {outagedMarkers.map((m) => (
         <group key={`outage-label-${m.id}`} position={m.mid}>
-          <Html center distanceFactor={8} zIndexRange={[100, 0]}>
-            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-[#c8443b] text-white text-[11px] font-bold rounded-none shadow-md whitespace-nowrap pointer-events-none border border-white/40 animate-pulse">
-              <Scissors className="w-3 h-3 rotate-90" />
-              <span>{m.name} OUT</span>
+          <Html center zIndexRange={[120, 0]}>
+            {m.isNewlyTripped ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '2px 7px',
+                  backgroundColor: '#ef4444',
+                  color: '#ffffff',
+                  fontSize: 11,
+                  lineHeight: '14px',
+                  fontWeight: 700,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                  borderRadius: 9999,
+                  boxShadow: '0 2px 6px rgba(0, 0, 0, 0.25)',
+                  whiteSpace: 'nowrap',
+                  pointerEvents: 'none',
+                  border: '1px solid rgba(255, 255, 255, 0.75)',
+                }}
+              >
+                <AlertTriangle style={{ width: 12, height: 12 }} />
+                <span>TRIPPED: {m.name}</span>
+              </div>
+            ) : m.isPreviouslyTripped ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  padding: '1px 6px',
+                  backgroundColor: '#475569',
+                  color: '#ffffff',
+                  fontSize: 10,
+                  lineHeight: '13px',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                  borderRadius: 9999,
+                  boxShadow: '0 1px 4px rgba(0, 0, 0, 0.2)',
+                  whiteSpace: 'nowrap',
+                  pointerEvents: 'none',
+                  border: '1px solid rgba(255, 255, 255, 0.4)',
+                }}
+              >
+                <span style={{ fontWeight: 700, color: '#fca5a5' }}>✕</span>
+                <span>{m.name}</span>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '2px 7px',
+                  backgroundColor: '#c8443b',
+                  color: '#ffffff',
+                  fontSize: 11.5,
+                  lineHeight: '14px',
+                  fontWeight: 700,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                  borderRadius: 9999,
+                  boxShadow: '0 2px 6px rgba(0, 0, 0, 0.25)',
+                  whiteSpace: 'nowrap',
+                  pointerEvents: 'none',
+                  border: '1px solid rgba(255, 255, 255, 0.7)',
+                }}
+              >
+                <Scissors style={{ width: 12, height: 12 }} />
+                <span>{m.name} OUT</span>
+              </div>
+            )}
+          </Html>
+        </group>
+      ))}
+
+      {/* Overloaded Lines Pulsing Indicator */}
+      {overloadedMarkers.map((m) => (
+        <group key={`overload-label-${m.id}`} position={m.mid}>
+          <Html center zIndexRange={[110, 0]}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 3,
+                padding: '1px 6px',
+                backgroundColor: 'rgba(217, 119, 6, 0.95)',
+                color: '#ffffff',
+                fontSize: 10,
+                lineHeight: '13px',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                borderRadius: 9999,
+                boxShadow: '0 1px 4px rgba(0, 0, 0, 0.2)',
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+                border: '1px solid #fde68a',
+              }}
+            >
+              <span>⚡ AT RISK: {m.name}</span>
             </div>
           </Html>
         </group>
       ))}
     </group>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// Voltage Level Color Helper & Compact Fixed-Screen Bus Label
+// -----------------------------------------------------------------------------
+function voltColour(kv: number): string {
+  if (kv >= 345) return '#7c3aed';
+  if (kv >= 230) return '#2563eb';
+  if (kv >= 115) return '#f59e0b';
+  if (kv >= 69)  return '#16a34a';
+  return '#9aa3ad';
+}
+
+const StageBusLabel: React.FC<{
+  bus: Bus;
+  pos: { x: number; y: number; z: number };
+  visible: boolean;
+  isDetailed: boolean;
+  isHighPriority?: boolean;
+}> = ({ bus, pos, visible, isDetailed, isHighPriority }) => {
+  const ieeeId = bus.id + 1;
+  const labelText = isDetailed
+    ? `BUS ${ieeeId} · ${bus.vn_kv || 132} kV${bus.gen_p_mw ? ` · ${Math.round(bus.gen_p_mw)} MW gen` : bus.base_p_mw ? ` · ${Math.round(bus.base_p_mw)} MW` : ''}`
+    : `BUS ${ieeeId}`;
+
+  return (
+    <Html position={[pos.x, pos.y + 0.16, pos.z]} center zIndexRange={[250, 0]}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: isDetailed ? '2px 7px 2px 5px' : '1px 5px 1px 4px',
+          background: isDetailed ? 'rgba(255, 255, 255, 0.98)' : 'rgba(255, 255, 255, 0.92)',
+          backdropFilter: 'blur(4px)',
+          border: isHighPriority ? '1px solid #c8443b' : '1px solid #cfd3d8',
+          borderRadius: 3,
+          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.12)',
+          whiteSpace: 'nowrap',
+          fontSize: 10.5,
+          lineHeight: '13px',
+          fontWeight: 600,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          color: isHighPriority ? '#c8443b' : '#1a2332',
+          pointerEvents: 'none',
+          userSelect: 'none',
+          transition: 'opacity 0.18s ease, transform 0.18s ease',
+          opacity: visible ? 1 : 0,
+          transform: visible ? 'scale(1)' : 'scale(0.95)',
+        }}
+      >
+        <span
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: '50%',
+            background: isHighPriority ? '#c8443b' : voltColour(bus.vn_kv || 132),
+            flexShrink: 0,
+          }}
+        />
+        <span>{labelText}</span>
+      </div>
+    </Html>
   );
 };
 
@@ -529,6 +762,11 @@ interface BusNetworkProps {
   reducedMotion: boolean;
   topologyOverlay: 'none' | 'degree' | 'betweenness' | 'community' | 'bridges';
   topologyData: any | null;
+  labelMode: 'smart' | 'all' | 'off';
+  hoveredBusId: number | null;
+  hoveredBranchId: number | null;
+  branchLoading: Record<string, number>;
+  gridRadius: number;
 }
 
 const BusNetwork: React.FC<BusNetworkProps> = ({
@@ -543,13 +781,25 @@ const BusNetwork: React.FC<BusNetworkProps> = ({
   onClickBus,
   reducedMotion,
   topologyOverlay,
-  topologyData
+  topologyData,
+  labelMode,
+  hoveredBusId,
+  hoveredBranchId,
+  branchLoading,
+  gridRadius,
 }) => {
+  const { camera, size } = useThree();
+  const [camDist, setCamDist] = useState(10);
+  useFrame(() => setCamDist(camera.position.length()));
+
   const [genTex, subTex, loadTex] = useLoader(THREE.TextureLoader, [
     '/assets/icons/generator.png',
     '/assets/icons/substation.png',
     '/assets/icons/load.png'
   ]);
+
+  // Scaled icon size: ~60% of original, scaled by grid size so 118 buses is clean & readable
+  const gridScale = Math.max(0.48, Math.min(1.0, 32 / Math.max(14, buses.length)));
 
   // Identify endpoint buses touching outaged lines
   const hotEndpointBuses = useMemo(() => {
@@ -564,6 +814,166 @@ const BusNetwork: React.FC<BusNetworkProps> = ({
     outagedGens.forEach((gid) => set.add(gid));
     return set;
   }, [outagedLines, outagedGens, branches]);
+
+  const hoveredBusIds = useMemo(() => {
+    const set = new Set<number>();
+    if (hoveredBusId !== null) set.add(hoveredBusId);
+    if (hoveredBranchId !== null) {
+      const br = branches.find((b) => b.id === hoveredBranchId);
+      if (br) {
+        set.add(br.from_bus);
+        set.add(br.to_bus);
+      }
+    }
+    return set;
+  }, [hoveredBusId, hoveredBranchId, branches]);
+
+  const highRiskBusIds = useMemo(() => {
+    const set = new Set<number>();
+    isolatedBuses.forEach((id) => set.add(id));
+    branches.forEach((br) => {
+      const load = branchLoading[String(br.id)] ?? 0;
+      if (load >= 100) {
+        set.add(br.from_bus);
+        set.add(br.to_bus);
+      }
+    });
+    return set;
+  }, [isolatedBuses, branches, branchLoading]);
+
+  const importantBusIds = useMemo(() => {
+    const scores = buses.map((b) => {
+      const gen = b.gen_p_mw || 0;
+      const load = b.base_p_mw || 0;
+      return { id: b.id, score: gen * 1.5 + load };
+    });
+    scores.sort((a, b) => b.score - a.score);
+    return new Set(scores.slice(0, 8).map((s) => s.id));
+  }, [buses]);
+
+  // Throttled screen-space collision avoidance & visibility calculation (100ms)
+  const [visibleBusIds, setVisibleBusIds] = useState<Set<number>>(new Set());
+  const lastUpdateRef = useRef(0);
+
+  useFrame(() => {
+    const now = performance.now();
+    if (now - lastUpdateRef.current < 100) return;
+    lastUpdateRef.current = now;
+
+    const width = size.width || window.innerWidth;
+    const height = size.height || window.innerHeight;
+
+    const candidates: Array<{
+      id: number;
+      priority: number;
+      distToCenter: number;
+      screenX: number;
+      screenY: number;
+    }> = [];
+
+    const tempVec = new THREE.Vector3();
+
+    for (const bus of buses) {
+      const pos = activeLayoutMap[bus.id];
+      if (!pos) continue;
+
+      const isHovered = hoveredBusIds.has(bus.id);
+      const isOutaged = hotEndpointBuses.has(bus.id);
+      const isHighRisk = highRiskBusIds.has(bus.id);
+      const isImportant = importantBusIds.has(bus.id);
+
+      let priority = -1;
+      if (isOutaged) priority = 4;
+      else if (isHovered) priority = 3;
+      else if (isHighRisk) priority = 2;
+      else if (isImportant) priority = 1;
+      else if (labelMode === 'all') priority = 0;
+      else if (labelMode === 'smart' && camDist < gridRadius * 2.5) priority = 0;
+
+      if (labelMode === 'off' && priority < 3) continue;
+      if (priority < 0) continue;
+
+      tempVec.set(pos.x, pos.y + 0.16, pos.z);
+      tempVec.project(camera);
+
+      // Frustum clipping
+      if (tempVec.z > 1.0 || tempVec.x < -1.1 || tempVec.x > 1.1 || tempVec.y < -1.1 || tempVec.y > 1.1) {
+        continue;
+      }
+
+      const distToCenter = Math.sqrt(tempVec.x * tempVec.x + tempVec.y * tempVec.y);
+
+      // Progressive zoom reveal in smart mode
+      if (labelMode === 'smart' && priority === 0 && distToCenter > 0.72) {
+        continue;
+      }
+
+      const screenX = ((tempVec.x + 1) / 2) * width;
+      const screenY = ((-tempVec.y + 1) / 2) * height;
+
+      candidates.push({
+        id: bus.id,
+        priority,
+        distToCenter,
+        screenX,
+        screenY,
+      });
+    }
+
+    // Sort by priority descending, then distance to center ascending
+    candidates.sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return a.distToCenter - b.distToCenter;
+    });
+
+    const acceptedIds = new Set<number>();
+    const boxes: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+    const maxLabels = labelMode === 'smart' ? 15 : 60;
+
+    for (const c of candidates) {
+      if (acceptedIds.size >= maxLabels && c.priority < 3) break;
+
+      const halfW = 34; // ~68px pill
+      const halfH = 12; // ~24px pill
+      const box = {
+        left: c.screenX - halfW,
+        right: c.screenX + halfW,
+        top: c.screenY - halfH,
+        bottom: c.screenY + halfH,
+      };
+
+      let collides = false;
+      if (c.priority < 3) {
+        for (const b of boxes) {
+          if (
+            box.left < b.right &&
+            box.right > b.left &&
+            box.top < b.bottom &&
+            box.bottom > b.top
+          ) {
+            collides = true;
+            break;
+          }
+        }
+      }
+
+      if (!collides) {
+        acceptedIds.add(c.id);
+        boxes.push(box);
+      }
+    }
+
+    setVisibleBusIds((prev) => {
+      if (prev.size === acceptedIds.size) {
+        let same = true;
+        for (const id of acceptedIds) {
+          if (!prev.has(id)) { same = false; break; }
+        }
+        if (same) return prev;
+      }
+      return acceptedIds;
+    });
+  });
 
   return (
     <group>
@@ -580,20 +990,21 @@ const BusNetwork: React.FC<BusNetworkProps> = ({
         const isGenOut = outagedGens.includes(bus.id);
 
         let color = '#ffffff';
-        let scale = isHot ? 0.35 : bus.type === 'generator' ? 0.3 : 0.25;
+        let baseScale = isHot ? 0.20 : bus.type === 'generator' ? 0.17 : 0.14;
+        let scale = baseScale * gridScale;
 
         // Apply Topology Overlays if in Map Mode
         if (topologyOverlay === 'degree' && topologyData?.per_bus_degree) {
           const deg = topologyData.per_bus_degree[bus.id] ?? 2;
           const maxDeg = Math.max(...Object.values(topologyData.per_bus_degree as Record<string, number>), 4);
           const norm = Math.min(1, deg / maxDeg);
-          scale = 0.22 + norm * 0.22;
+          scale = (0.13 + norm * 0.13) * gridScale;
           color = norm > 0.6 ? '#dc2626' : norm > 0.3 ? '#f59e0b' : '#38bdf8';
         } else if (topologyOverlay === 'betweenness' && topologyData?.per_bus_betweenness) {
           const bVal = topologyData.per_bus_betweenness[bus.id] ?? 0;
           const maxB = Math.max(...Object.values(topologyData.per_bus_betweenness as Record<string, number>), 0.05);
           const norm = Math.min(1, bVal / maxB);
-          scale = 0.22 + norm * 0.24;
+          scale = (0.13 + norm * 0.14) * gridScale;
           color = norm > 0.5 ? '#ec4899' : norm > 0.2 ? '#c084fc' : '#818cf8';
         } else if (topologyOverlay === 'community' && topologyData?.per_bus_community) {
           const commId = topologyData.per_bus_community[bus.id] ?? 0;
@@ -603,11 +1014,13 @@ const BusNetwork: React.FC<BusNetworkProps> = ({
           else if (isIsolated) color = '#6b7280';
         }
 
-        const opacity = isIsolated ? 0.35 : 0.95;
+        const opacity = isIsolated ? 0.22 : 0.95;
+        const isVisible = visibleBusIds.has(bus.id) || (showBusNumbers && labelMode !== 'off');
+        const isDetailed = hoveredBusIds.has(bus.id) || isHot;
 
         return (
           <group key={`bus-node-${bus.id}`} position={[layout.x, layout.y, layout.z]}>
-            {/* Bus Sprite Icon */}
+            {/* Bus Sprite Icon - scaled to ~60% size, stable across zoom */}
             <sprite scale={[scale, scale, scale]}>
               <spriteMaterial
                 map={texture}
@@ -620,13 +1033,13 @@ const BusNetwork: React.FC<BusNetworkProps> = ({
 
             {/* Pulsing red halo for outage endpoints */}
             {isHot && !reducedMotion && (
-              <mesh scale={[0.42, 0.42, 0.42]}>
+              <mesh scale={[scale * 1.5, scale * 1.5, scale * 1.5]}>
                 <ringGeometry args={[0.3, 0.45, 24]} />
                 <meshBasicMaterial color="#c8443b" transparent opacity={0.65} side={THREE.DoubleSide} />
               </mesh>
             )}
 
-            {/* Invisible Hit sphere for raycasting */}
+            {/* Hit sphere for raycasting */}
             <mesh
               onPointerOver={(e) => {
                 e.stopPropagation();
@@ -641,18 +1054,128 @@ const BusNetwork: React.FC<BusNetworkProps> = ({
                 onClickBus(bus, e.shiftKey);
               }}
             >
-              <sphereGeometry args={[0.32, 12, 12]} />
+              <sphereGeometry args={[Math.max(0.18, 0.26 * gridScale), 8, 8]} />
               <meshBasicMaterial transparent opacity={0.001} depthWrite={false} />
             </mesh>
 
-            {/* Optional Bus Numbers Tag */}
-            {showBusNumbers && (
-              <Html distanceFactor={9} center position={[0, -0.28, 0]}>
-                <span className="text-[10px] font-mono font-medium text-ink bg-white/80 px-1 py-0.5 border border-[#cfd3d8] rounded-none pointer-events-none select-none">
-                  #{bus.id}
-                </span>
-              </Html>
-            )}
+            {/* Smart Bus Label */}
+            <StageBusLabel
+              bus={bus}
+              pos={layout}
+              visible={isVisible}
+              isDetailed={isDetailed}
+              isHighPriority={isHot || isGenOut}
+            />
+          </group>
+        );
+      })}
+    </group>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// Voltage Bands Underlay (Map Mode when Group by Voltage is enabled)
+// -----------------------------------------------------------------------------
+const VoltageBands: React.FC<{
+  activeLayoutMap: Record<number, { x: number; y: number; z: number }>;
+  buses: Bus[];
+  visible: boolean;
+}> = ({ activeLayoutMap, buses, visible }) => {
+  const bands = useMemo(() => {
+    if (!visible || buses.length === 0) return [];
+    const voltGroups = new Map<number, Bus[]>();
+    buses.forEach((b) => {
+      const kv = b.vn_kv || 132;
+      const arr = voltGroups.get(kv) || [];
+      arr.push(b);
+      voltGroups.set(kv, arr);
+    });
+
+    const result: Array<{
+      kv: number;
+      minX: number;
+      maxX: number;
+      minZ: number;
+      maxZ: number;
+      color: string;
+    }> = [];
+
+    voltGroups.forEach((groupBuses, kv) => {
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      let valid = 0;
+      groupBuses.forEach((b) => {
+        const p = activeLayoutMap[b.id];
+        if (p) {
+          minX = Math.min(minX, p.x);
+          maxX = Math.max(maxX, p.x);
+          minZ = Math.min(minZ, p.z);
+          maxZ = Math.max(maxZ, p.z);
+          valid++;
+        }
+      });
+      if (valid > 0) {
+        const padX = 0.45;
+        const padZ = 0.45;
+        result.push({
+          kv,
+          minX: minX - padX,
+          maxX: maxX + padX,
+          minZ: minZ - padZ,
+          maxZ: maxZ + padZ,
+          color: voltColour(kv),
+        });
+      }
+    });
+
+    return result;
+  }, [activeLayoutMap, buses, visible]);
+
+  if (!visible || bands.length === 0) return null;
+
+  return (
+    <group position={[0, -0.05, 0]}>
+      {bands.map((band) => {
+        const width = Math.max(0.8, band.maxX - band.minX);
+        const depth = Math.max(0.8, band.maxZ - band.minZ);
+        const cx = (band.minX + band.maxX) / 2;
+        const cz = (band.minZ + band.maxZ) / 2;
+        return (
+          <group key={`volt-band-${band.kv}`}>
+            <mesh position={[cx, 0, cz]} rotation={[-Math.PI / 2, 0, 0]}>
+              <planeGeometry args={[width, depth]} />
+              <meshBasicMaterial
+                color={band.color}
+                transparent
+                opacity={0.08}
+                depthWrite={false}
+              />
+            </mesh>
+            <lineSegments position={[cx, 0.001, cz]} rotation={[-Math.PI / 2, 0, 0]}>
+              <edgesGeometry args={[new THREE.PlaneGeometry(width, depth)]} />
+              <lineBasicMaterial color={band.color} transparent opacity={0.25} />
+            </lineSegments>
+            <Html position={[band.minX + 0.1, 0.01, band.minZ + 0.1]} center={false} zIndexRange={[30, 0]}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  padding: '1px 4px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.85)',
+                  backdropFilter: 'blur(2px)',
+                  border: `1px solid ${band.color}`,
+                  borderRadius: 2,
+                  fontSize: 9.5,
+                  fontWeight: 600,
+                  fontFamily: 'ui-monospace, monospace',
+                  color: band.color,
+                  pointerEvents: 'none',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span>{band.kv} kV</span>
+              </div>
+            </Html>
           </group>
         );
       })}
@@ -690,6 +1213,14 @@ const AnimatedSceneGroup: React.FC<{
   shockwaveTime: number;
   sparks: Array<{ pos: [number, number, number]; time: number }>;
   showBusNumbers: boolean;
+  labelMode: 'smart' | 'all' | 'off';
+  groupByVoltage: boolean;
+  uniqueVoltages: number[];
+  gridRadius: number;
+  hoveredBusId: number | null;
+  newlyTrippedBranchIds?: Set<number>;
+  previouslyTrippedBranchIds?: Set<number>;
+  overloadedBranchIds?: Set<number>;
 }> = (props) => {
   const groupRef = useRef<THREE.Group>(null);
   const animProgressRef = useRef<number>(props.viewMode === 'map' ? 1 : 0);
@@ -731,6 +1262,12 @@ const AnimatedSceneGroup: React.FC<{
 
   return (
     <group ref={groupRef} rotation={[0, props.viewMode === 'map' ? 0 : 0.4, 0]}>
+      <VoltageBands
+        activeLayoutMap={currentMap}
+        buses={props.buses}
+        visible={props.viewMode === 'map' && props.groupByVoltage && props.uniqueVoltages.length >= 2}
+      />
+
       <BranchNetwork
         branches={props.branches}
         activeLayoutMap={currentMap}
@@ -746,6 +1283,9 @@ const AnimatedSceneGroup: React.FC<{
         branchCriticalityMap={props.branchCriticalityMap}
         isBridgeMode={props.topologyOverlay === 'bridges'}
         bridgeBranchIds={props.bridgeBranchIds}
+        newlyTrippedBranchIds={props.newlyTrippedBranchIds}
+        previouslyTrippedBranchIds={props.previouslyTrippedBranchIds}
+        overloadedBranchIds={props.overloadedBranchIds}
       />
 
       <BusNetwork
@@ -761,6 +1301,11 @@ const AnimatedSceneGroup: React.FC<{
         reducedMotion={props.reducedMotion}
         topologyOverlay={props.topologyOverlay}
         topologyData={props.topologyData}
+        labelMode={props.labelMode}
+        hoveredBusId={props.hoveredBusId}
+        hoveredBranchId={props.hoveredBranch?.id ?? null}
+        branchLoading={props.activeBranchLoadings}
+        gridRadius={props.gridRadius}
       />
 
       <ShockwaveRing
@@ -777,11 +1322,16 @@ const AnimatedSceneGroup: React.FC<{
 // =============================================================================
 // Main Interactive Stage Scene Component
 // =============================================================================
-export const StageScene: React.FC = () => {
+export interface StageSceneProps {
+  isFullscreen?: boolean;
+}
+
+export const StageScene: React.FC<StageSceneProps> = ({ isFullscreen = false }) => {
   const {
     buses,
     branches,
     layoutMap,
+    layout2dMap,
     outagedElements,
     toggleOutagedElement,
     prediction,
@@ -805,7 +1355,11 @@ export const StageScene: React.FC = () => {
     setTopologyOverlay,
     topologyData,
     fetchTopology,
-    gridCase
+    gridCase,
+    groupByVoltage,
+    setGroupByVoltage,
+    labelMode,
+    setLabelMode,
   } = useGridStore();
 
   const [hoveredBranch, setHoveredBranch] = useState<Branch | null>(null);
@@ -817,48 +1371,51 @@ export const StageScene: React.FC = () => {
     fetchTopology();
   }, [fetchTopology, gridCase]);
 
-  // Compute 2D Map layout with Voltage Levels as Horizontal Bands
+  // Unique voltage levels
+  const uniqueVoltages = useMemo(
+    () => Array.from(new Set(buses.map((b) => b.vn_kv || 132))),
+    [buses]
+  );
+
+  // Compute 2D Map layout: Kamada-Kawai layout from backend layout2dMap, never derived from voltage level
   const mapLayoutMap = useMemo(() => {
     const mapPos: Record<number, { x: number; y: number; z: number }> = {};
     if (buses.length === 0) return mapPos;
 
-    // Distinct voltage levels sorted descending (high voltage at top band)
-    const voltLevels = Array.from(new Set(buses.map((b) => b.vn_kv || 132))).sort((a, b) => b - a);
-    const K = voltLevels.length;
-
-    voltLevels.forEach((v, bandIdx) => {
-      // Band Z position
-      const bandZ = K <= 1 ? 0 : -2.2 + (bandIdx / (K - 1)) * 4.4;
-
-      // Buses in this band
-      const bandBuses = buses.filter((b) => (b.vn_kv || 132) === v);
-      bandBuses.sort((a, b) => (layoutMap[a.id]?.x || 0) - (layoutMap[b.id]?.x || 0));
-
-      const count = bandBuses.length;
-      bandBuses.forEach((b, i) => {
-        const xPos = count <= 1 ? 0 : -3.2 + (i / (count - 1)) * 6.4;
-        mapPos[b.id] = {
-          x: xPos,
-          y: 0,
-          z: bandZ
-        };
+    if (layout2dMap && Object.keys(layout2dMap).length > 0) {
+      buses.forEach((b) => {
+        const p2d = layout2dMap[b.id];
+        if (p2d) {
+          mapPos[b.id] = { x: p2d.x, y: 0, z: p2d.z };
+        } else if (layoutMap[b.id]) {
+          mapPos[b.id] = { x: layoutMap[b.id].x, y: 0, z: layoutMap[b.id].z };
+        }
       });
+      return mapPos;
+    }
+
+    // Fallback: top-down projection of 3D layout (y=0)
+    buses.forEach((b) => {
+      const p3d = layoutMap[b.id];
+      if (p3d) {
+        mapPos[b.id] = { x: p3d.x, y: 0, z: p3d.z };
+      }
     });
-
     return mapPos;
-  }, [buses, layoutMap]);
+  }, [buses, layout2dMap, layoutMap]);
 
-  // Bounding sphere radius of the 3D layout – drives camera distance limits
+  // Bounding radius of the active layout – drives camera distance limits and framing
   const gridRadius = useMemo(() => {
-    const vals = Object.values(layoutMap);
+    const activeMap = viewMode === 'map' ? mapLayoutMap : layoutMap;
+    const vals = Object.values(activeMap);
     if (vals.length === 0) return 3.5;
     let maxR = 0;
     vals.forEach((p: any) => {
-      const d = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+      const d = Math.sqrt(p.x * p.x + (p.y || 0) * (p.y || 0) + p.z * p.z);
       if (d > maxR) maxR = d;
     });
-    return Math.max(3.5, maxR * 1.1);
-  }, [layoutMap]);
+    return Math.max(3.5, maxR * 1.05);
+  }, [viewMode, mapLayoutMap, layoutMap]);
 
   const bridgeBranchIds = useMemo(() => {
     return new Set(
@@ -871,6 +1428,61 @@ export const StageScene: React.FC = () => {
   const influentialBranchIds = useMemo(() => {
     return new Set((prediction?.top_influential_branches || []).map((b) => b.branch_id));
   }, [prediction]);
+
+  // Derive newly tripped, previously tripped, overloaded branches and gentle framing centroid
+  const {
+    newlyTrippedBranchIds,
+    previouslyTrippedBranchIds,
+    overloadedBranchIds,
+    framingCentroid,
+  } = useMemo(() => {
+    if (!replayData || replayStepIndex < 0 || !replayData.steps[replayStepIndex]) {
+      return {
+        newlyTrippedBranchIds: new Set<number>(),
+        previouslyTrippedBranchIds: new Set<number>(),
+        overloadedBranchIds: new Set<number>(),
+        framingCentroid: null as [number, number, number] | null,
+      };
+    }
+    const currentStep = replayData.steps[replayStepIndex];
+    const newly = new Set<number>(currentStep.newly_tripped_branches || []);
+
+    const prev = new Set<number>();
+    for (let i = 0; i < replayStepIndex; i++) {
+      (replayData.steps[i]?.newly_tripped_branches || []).forEach((id) => prev.add(id));
+    }
+
+    const overloaded = new Set<number>();
+    const loadings = currentStep.branch_loadings || {};
+    Object.entries(loadings).forEach(([bid, load]) => {
+      const id = Number(bid);
+      if (load >= 100 && !newly.has(id) && !prev.has(id)) {
+        overloaded.add(id);
+      }
+    });
+
+    let cx = 0, cy = 0, cz = 0, count = 0;
+    newly.forEach((lid) => {
+      const br = branches.find((b) => b.id === lid);
+      if (br && layoutMap[br.from_bus] && layoutMap[br.to_bus]) {
+        const p1 = layoutMap[br.from_bus];
+        const p2 = layoutMap[br.to_bus];
+        cx += (p1.x + p2.x) * 0.5;
+        cy += (p1.y + p2.y) * 0.5;
+        cz += (p1.z + p2.z) * 0.5;
+        count++;
+      }
+    });
+
+    const centroid: [number, number, number] | null = count > 0 ? [cx / count, cy / count, cz / count] : null;
+
+    return {
+      newlyTrippedBranchIds: newly,
+      previouslyTrippedBranchIds: prev,
+      overloadedBranchIds: overloaded,
+      framingCentroid: centroid,
+    };
+  }, [replayData, replayStepIndex, branches, layoutMap]);
 
   // Shockwave state
   const [shockwaveOrigin, setShockwaveOrigin] = useState<[number, number, number] | null>(null);
@@ -1006,7 +1618,7 @@ export const StageScene: React.FC = () => {
         type: 'branch',
         x: mouseX,
         y: mouseY,
-        title: br.name || `Line ${br.from_bus}-${br.to_bus}`,
+        title: br.name || formatBranchName(br.from_bus, br.to_bus, 1),
         details: [
           isBridge ? '★ BRIDGE CUT-EDGE (Failure islands network component)' : null,
           critRisk !== undefined ? `N-1 Fragility Risk: ${(critRisk * 100).toFixed(1)}% if alone outaged` : null,
@@ -1095,63 +1707,94 @@ export const StageScene: React.FC = () => {
   }, []);
 
   return (
-    <div ref={canvasWrapperRef} className="relative w-full h-[500px] bg-soft overflow-hidden select-none border border-[#e5e7eb]">
-      {/* 1. 3D | Map View Switch & Topology Overlay Bar (Top-Left of Scene) */}
-      <div className="absolute top-3 left-3 z-30 flex flex-wrap items-center gap-2 select-none">
-        {/* View Mode Toggle */}
-        <div className="flex items-center bg-white/95 backdrop-blur-md border border-[#cfd3d8] shadow-2xs p-0.5">
-          <button
-            onClick={() => setViewMode('3d')}
-            className={`px-3 py-1 text-xs font-medium transition-all ${
-              viewMode === '3d'
-                ? 'bg-charcoal text-white shadow-2xs'
-                : 'text-[#555] hover:text-ink'
-            }`}
-          >
-            3D View
-          </button>
-          <button
-            onClick={() => setViewMode('map')}
-            className={`px-3 py-1 text-xs font-medium transition-all ${
-              viewMode === 'map'
-                ? 'bg-charcoal text-white shadow-2xs'
-                : 'text-[#555] hover:text-ink'
-            }`}
-          >
-            Map (2D)
-          </button>
-          <button
-            onClick={() => setViewMode('city')}
-            className={`px-3 py-1 text-xs font-medium transition-all ${
-              viewMode === 'city'
-                ? 'bg-charcoal text-white shadow-2xs'
-                : 'text-[#555] hover:text-ink'
-            }`}
-          >
-            City
-          </button>
-        </div>
+    <div ref={canvasWrapperRef} className={`relative w-full ${isFullscreen ? 'h-full flex-1' : 'h-[500px]'} bg-soft overflow-hidden select-none border border-[#e5e7eb]`}>
+      {/* 1. 3D | Map View Switch & Controls (Top-Left of Scene) - hidden in full screen to avoid duplication */}
+      {!isFullscreen && (
+        <div className="absolute top-3 left-3 z-30 flex flex-wrap items-center gap-2 select-none">
+          {/* View Mode Toggle */}
+          <div className="flex items-center bg-white/95 backdrop-blur-md border border-[#cfd3d8] shadow-2xs p-0.5">
+            <button
+              onClick={() => setViewMode('3d')}
+              className={`px-3 py-1 text-xs font-medium transition-all ${
+                viewMode === '3d'
+                  ? 'bg-charcoal text-white shadow-2xs'
+                  : 'text-[#555] hover:text-ink'
+              }`}
+            >
+              3D View
+            </button>
+            <button
+              onClick={() => setViewMode('map')}
+              className={`px-3 py-1 text-xs font-medium transition-all ${
+                viewMode === 'map'
+                  ? 'bg-charcoal text-white shadow-2xs'
+                  : 'text-[#555] hover:text-ink'
+              }`}
+            >
+              Map (2D)
+            </button>
+            <button
+              onClick={() => setViewMode('city')}
+              className={`px-3 py-1 text-xs font-medium transition-all ${
+                viewMode === 'city'
+                  ? 'bg-charcoal text-white shadow-2xs'
+                  : 'text-[#555] hover:text-ink'
+              }`}
+            >
+              City
+            </button>
+          </div>
 
-        {/* Topology Overlay Menu in Map Mode */}
-        {viewMode === 'map' && (
-          <div className="flex items-center gap-1 bg-white/95 backdrop-blur-md border border-[#cfd3d8] shadow-2xs px-2 py-1 text-xs">
-            <span className="eyebrow mr-1 text-charcoal">Topology Overlay:</span>
-            {(['none', 'degree', 'betweenness', 'community', 'bridges'] as const).map((overlay) => (
+          {/* Labels: Smart | All | Off */}
+          <div className="flex items-center bg-white/95 backdrop-blur-md border border-[#cfd3d8] shadow-2xs p-0.5 text-xs">
+            <span className="px-2 py-0.5 text-[10px] uppercase font-mono tracking-wider text-[#666]">Labels</span>
+            {(['smart', 'all', 'off'] as const).map((mode) => (
               <button
-                key={overlay}
-                onClick={() => setTopologyOverlay(overlay)}
-                className={`px-2 py-0.5 text-[11px] capitalize transition-colors ${
-                  topologyOverlay === overlay
-                    ? 'bg-charcoal text-white font-medium'
-                    : 'text-[#555] hover:text-ink hover:bg-[#f0f0f0]'
+                key={mode}
+                onClick={() => setLabelMode(mode)}
+                className={`px-2 py-0.5 text-[11px] font-medium capitalize transition-all ${
+                  labelMode === mode ? 'bg-charcoal text-white shadow-2xs' : 'text-[#555] hover:text-ink'
                 }`}
               >
-                {overlay === 'community' ? 'Clusters' : overlay}
+                {mode}
               </button>
             ))}
           </div>
-        )}
-      </div>
+
+          {/* Topology Overlay Menu in Map Mode */}
+          {viewMode === 'map' && (
+            <div className="flex items-center gap-1 bg-white/95 backdrop-blur-md border border-[#cfd3d8] shadow-2xs px-2 py-1 text-xs">
+              <span className="eyebrow mr-1 text-charcoal">Topology:</span>
+              {(['none', 'degree', 'betweenness', 'community', 'bridges'] as const).map((overlay) => (
+                <button
+                  key={overlay}
+                  onClick={() => setTopologyOverlay(overlay)}
+                  className={`px-2 py-0.5 text-[11px] capitalize transition-colors ${
+                    topologyOverlay === overlay
+                      ? 'bg-charcoal text-white font-medium'
+                      : 'text-[#555] hover:text-ink hover:bg-[#f0f0f0]'
+                  }`}
+                >
+                  {overlay === 'community' ? 'Clusters' : overlay}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Group by Voltage Toggle in Map Mode (only when 2+ voltages) */}
+          {viewMode === 'map' && uniqueVoltages.length >= 2 && (
+            <label className="flex items-center gap-1.5 bg-white/95 backdrop-blur-md border border-[#cfd3d8] shadow-2xs px-2.5 py-1 text-xs text-[#555] cursor-pointer hover:text-ink">
+              <input
+                type="checkbox"
+                checked={groupByVoltage}
+                onChange={(e) => setGroupByVoltage(e.target.checked)}
+                className="accent-charcoal cursor-pointer"
+              />
+              <span className="text-[11px] font-medium">Group by voltage</span>
+            </label>
+          )}
+        </div>
+      )}
 
       {/* 2. Topology Stats Card (In Map Mode or when overlay active) */}
       {viewMode === 'map' && topologyData && (
@@ -1241,6 +1884,10 @@ export const StageScene: React.FC = () => {
           onHoverBus={handleHoverBus}
           hoveredBranchId={hoveredBranch?.id ?? null}
           hoveredBusId={hoveredBus?.id ?? null}
+          newlyTrippedBranchIds={newlyTrippedBranchIds}
+          previouslyTrippedBranchIds={previouslyTrippedBranchIds}
+          overloadedBranchIds={overloadedBranchIds}
+          framingCentroid={framingCentroid}
         />
       ) : (
         <Canvas
@@ -1258,6 +1905,8 @@ export const StageScene: React.FC = () => {
             reducedMotion={reducedMotion}
             viewMode={viewMode === 'map' ? 'map' : '3d'}
             gridRadius={gridRadius}
+            gridCase={gridCase}
+            framingCentroid={framingCentroid}
           />
 
           <AnimatedSceneGroup
@@ -1287,6 +1936,14 @@ export const StageScene: React.FC = () => {
             shockwaveTime={shockwaveTime}
             sparks={sparks}
             showBusNumbers={showBusNumbers}
+            labelMode={labelMode}
+            groupByVoltage={groupByVoltage}
+            uniqueVoltages={uniqueVoltages}
+            gridRadius={gridRadius}
+            hoveredBusId={hoveredBus?.id ?? null}
+            newlyTrippedBranchIds={newlyTrippedBranchIds}
+            previouslyTrippedBranchIds={previouslyTrippedBranchIds}
+            overloadedBranchIds={overloadedBranchIds}
           />
         </Canvas>
       )}
@@ -1321,11 +1978,11 @@ export const StageScene: React.FC = () => {
         </div>
       )}
 
-      {/* Map Mode Voltage Bands Indicator */}
-      {viewMode === 'map' && (
-        <div className="absolute bottom-3 left-4 pointer-events-none">
+      {/* Map Mode Voltage Bands Indicator - only when enabled and grid has multiple voltages */}
+      {viewMode === 'map' && groupByVoltage && uniqueVoltages.length >= 2 && (
+        <div className="absolute bottom-3 left-4 pointer-events-none z-10">
           <span className="text-[11px] text-[#555] bg-white/90 backdrop-blur-sm px-2.5 py-1 border border-[#e5e7eb] font-mono shadow-2xs">
-            Horizontal Voltage Bands: High Voltage (Top) → Medium Voltage (Center) → Subtransmission (Bottom)
+            Voltage Bands: Color-coded zones group buses by rated voltage level
           </span>
         </div>
       )}

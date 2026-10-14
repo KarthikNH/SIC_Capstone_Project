@@ -51,7 +51,7 @@ from src.dataset_card import (
     TABULAR_PATH,
     RAW_DATA_PATH
 )
-from src.explainability_extensions import get_global_insights
+from src.explainability_extensions import get_global_insights, compute_suggested_fix
 from src.mitigation import evaluate_mitigation_actions
 from src.chat_service import stream_chat_response
 from src.topology import compute_grid_topology
@@ -70,7 +70,7 @@ from src.grid_manager import (
     validate_and_calibrate_grid,
 )
 from src.inference import compute_whatif_curve, load_inference_resources, predict
-from src.layout import compute_or_load_3d_layout
+from src.layout import compute_or_load_3d_layout, compute_or_load_2d_layout
 from src.ood_detector import evaluate_ood, get_grid_ood_status, get_training_ood_stats
 from src.replay import simulate_cascade
 from src.utils.config import load_config
@@ -105,6 +105,10 @@ class PredictRequest(BaseModel):
         le=1.5,
         description="System load scale multiplier (0.6 to 1.2 typical range)."
     )
+    modifications: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional operational modifications (load_scale, line ratings, etc.)."
+    )
 
     class Config:
         json_schema_extra = {
@@ -136,6 +140,20 @@ class CascadeReplayRequest(BaseModel):
     case: Optional[str] = Field(default="case30")
     outaged: List[Union[str, int]] = Field(default=["line_3"])
     load_scale: float = Field(default=1.0, ge=0.5, le=1.5)
+    modifications: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional operational modifications (load_scale, line ratings, etc.)."
+    )
+
+
+class SuggestFixRequest(BaseModel):
+    grid_id: Optional[str] = Field(default=None)
+    case: Optional[str] = Field(default=None)
+    outaged: List[Union[str, int]] = Field(default=["line_3"])
+    load_scale: float = Field(default=1.0, ge=0.5, le=1.5)
+    current_probability: Optional[float] = Field(default=None)
+    actual_cascade: Optional[bool] = Field(default=None)
+    modifications: Optional[Dict[str, Any]] = Field(default=None)
 
 
 class MitigateRequest(BaseModel):
@@ -176,6 +194,19 @@ async def lifespan(app: FastAPI):
     compute_or_load_3d_layout("case118")
     # Warm-up inference to eliminate initial JIT delay
     predict("case30", ["line_0"], 1.0)
+
+    # Check that data/dataset_card.json exists; if missing, generate it automatically
+    dataset_card_path = PROJECT_ROOT / "data" / "dataset_card.json"
+    if not dataset_card_path.exists():
+        print(f"[DatasetCard] Notice: {dataset_card_path} is missing. Automatically generating on startup...")
+        try:
+            generate_dataset_card()
+            print(f"[DatasetCard] Successfully generated dataset card at {dataset_card_path}")
+        except Exception as e:
+            print(f"[DatasetCard] Warning: Could not generate dataset card automatically: {e}")
+    else:
+        print(f"[DatasetCard] Found valid dataset card at {dataset_card_path}")
+
     yield
 
 
@@ -472,6 +503,18 @@ async def get_grid_layout_endpoint(grid_id: str):
         raise HTTPException(status_code=404, detail=f"Grid '{grid_id}' not found.")
 
 
+@app.get("/grids/{grid_id}/layout2d", tags=["Grid Management"])
+@app.get("/grid/{grid_id}/layout2d", tags=["Grid Management"])
+async def get_grid_layout_2d_endpoint(grid_id: str):
+    """Get cached 2D topological layout (Kamada-Kawai distance-stress layout) for a specific grid."""
+    try:
+        return compute_or_load_2d_layout(grid_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Grid '{grid_id}' not found.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/grids/{grid_id}/stats", tags=["Grid Management"])
 async def get_grid_statistics_endpoint(grid_id: str):
     """
@@ -596,7 +639,8 @@ async def run_predict(req: PredictRequest):
         result = predict(
             grid_case=grid_target,
             outaged_elements=req.outaged,
-            load_scale=req.load_scale
+            load_scale=req.load_scale,
+            modifications=req.modifications
         )
         # Ensure dictionary integer keys are strings for JSON serialization
         result["per_branch_loading"] = {str(k): v for k, v in result["per_branch_loading"].items()}
@@ -653,6 +697,30 @@ async def get_dataset_card_endpoint():
     return get_dataset_card_cached()
 
 
+@app.get("/dataset/splits", tags=["Dataset"])
+async def get_dataset_splits_endpoint():
+    """Return train, validation, and test split details with leakage assertions."""
+    card = get_dataset_card_cached()
+    splits_audit = card.get("splits_and_leakage_audit", {})
+    class_balance = splits_audit.get("class_balance_per_split", {})
+    split_sizes = {
+        name: {
+            sub: data.get("total", 0)
+            for sub, data in subsets.items()
+        }
+        for name, subsets in class_balance.items()
+    }
+    return {
+        "headline_split": splits_audit.get("headline_split", "random"),
+        "total_scenarios": card.get("scenario_counts", {}).get("total_simulated", 500),
+        "split_sizes": split_sizes,
+        "split_definitions": splits_audit.get("split_definitions", {}),
+        "class_balance_per_split": class_balance,
+        "leakage_assertions": splits_audit.get("leakage_assertions", {}),
+        "zero_temporal_leakage_guarantee": splits_audit.get("zero_temporal_leakage_guarantee", "")
+    }
+
+
 @app.get("/dataset/features", tags=["Dataset"])
 async def get_dataset_features_endpoint():
     """Return feature dictionary with unit, level, and zero-leakage confirmation."""
@@ -672,6 +740,15 @@ async def get_dataset_distribution_endpoint(
         return get_feature_distribution(feature_name=feature, split=split)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/dataset/sample", tags=["Dataset"])
+async def get_dataset_default_sample_endpoint(scenario_id: int = Query(default=0)):
+    """Return features, graph snapshot, and outcome for a scenario (defaults to scenario 0)."""
+    try:
+        return get_scenario_sample(scenario_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/dataset/sample/{scenario_id}", tags=["Dataset"])
@@ -828,11 +905,47 @@ async def run_cascade_replay(req: CascadeReplayRequest):
         replay_result = simulate_cascade(
             grid_case=grid_target,
             outaged_elements=req.outaged,
-            load_scale=req.load_scale
+            load_scale=req.load_scale,
+            modifications=req.modifications
         )
         return replay_result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Simulation replay failure: {str(e)}")
+
+
+@app.post("/suggest-fix", tags=["Mitigation"])
+@app.post("/suggested-fix", tags=["Mitigation"])
+async def suggest_fix_endpoint(req: SuggestFixRequest):
+    """
+    Search for minimal actionable counterfactual fix.
+    If model and simulator disagree (e.g. actual_cascade is true), searches using
+    the quasi-dynamic cascade simulator. Otherwise evaluates model risk trajectory.
+    """
+    grid_target = req.grid_id or req.case or "case30"
+    try:
+        current_risk = req.current_probability
+        if current_risk is None:
+            pred = predict(
+                grid_case=grid_target,
+                outaged_elements=req.outaged,
+                load_scale=req.load_scale,
+                include_explainability=False,
+                modifications=req.modifications
+            )
+            current_risk = float(pred.get("cascade_probability", pred.get("probability", 0.0)))
+
+        return compute_suggested_fix(
+            grid_id=grid_target,
+            outaged_elements=[str(e) for e in req.outaged],
+            load_scale=req.load_scale,
+            current_risk=current_risk,
+            predict_fn=lambda g, o, s: predict(g, o, s, include_explainability=False, modifications=req.modifications),
+            actual_cascade=req.actual_cascade,
+            modifications=req.modifications,
+            alert_threshold=0.35
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Suggest fix computation failed: {str(e)}")
 
 
 # ==============================================================================
@@ -904,6 +1017,8 @@ async def legacy_get_grid(case: str = Query("case30")):
     gen_p = net.gen.groupby("bus")["p_mw"].sum().to_dict() if hasattr(net, "gen") and len(net.gen) > 0 and "p_mw" in net.gen.columns else {}
     gen_q = net.gen.groupby("bus")["q_mvar"].sum().to_dict() if hasattr(net, "gen") and len(net.gen) > 0 and "q_mvar" in net.gen.columns else {}
 
+    bus_offset = 1 if len(net.bus) > 0 and min(net.bus.index) == 0 else 0
+
     buses = []
     for b_id in net.bus.index:
         b_int = int(b_id)
@@ -918,7 +1033,7 @@ async def legacy_get_grid(case: str = Query("case30")):
 
         buses.append({
             "id": b_int,
-            "name": f"Bus {b_int}",
+            "name": f"Bus {b_int + bus_offset}",
             "type": b_type,
             "vn_kv": float(net.bus.loc[b_id, "vn_kv"]) if "vn_kv" in net.bus else 135.0,
             "base_p_mw": float(load_p.get(b_int, 0.0)),
@@ -935,9 +1050,12 @@ async def legacy_get_grid(case: str = Query("case30")):
         rating = float(net.line.loc[l_id, "max_i_ka"]) if "max_i_ka" in net.line else 1.0
         in_svc = bool(net.line.loc[l_id, "in_service"]) if "in_service" in net.line else True
 
+        fb = int(net.line.loc[l_id, "from_bus"]) + bus_offset
+        tb = int(net.line.loc[l_id, "to_bus"]) + bus_offset
+
         branches.append({
             "id": l_int,
-            "name": f"Line {int(net.line.loc[l_id, 'from_bus'])}-{int(net.line.loc[l_id, 'to_bus'])}",
+            "name": f"Line {fb}-{tb}",
             "from_bus": int(net.line.loc[l_id, "from_bus"]),
             "to_bus": int(net.line.loc[l_id, "to_bus"]),
             "is_transformer": False,
@@ -959,6 +1077,11 @@ async def legacy_get_grid(case: str = Query("case30")):
 @app.get("/layout", tags=["Topology"])
 async def legacy_get_layout(case: str = Query("case30")):
     return get_grid_3d_layout(case)
+
+
+@app.get("/layout2d", tags=["Topology"])
+async def legacy_get_layout2d(case: str = Query("case30")):
+    return compute_or_load_2d_layout(case)
 
 
 if __name__ == "__main__":

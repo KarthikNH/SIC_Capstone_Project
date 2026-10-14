@@ -74,12 +74,12 @@ class PowerGridScaler:
         """
         data_norm = data.clone()
 
-        # Normalize continuous node features
-        norm_node = (data_norm.x[:, :self.continuous_node_dim] - self.node_mean) / self.node_std
+        # Normalize continuous node features with robust bounds [-10, 10]
+        norm_node = torch.clamp((data_norm.x[:, :self.continuous_node_dim] - self.node_mean) / self.node_std, -10.0, 10.0)
         data_norm.x = torch.cat([norm_node, data_norm.x[:, self.continuous_node_dim:]], dim=1)
 
-        # Normalize continuous edge features
-        norm_edge = (data_norm.edge_attr[:, :self.continuous_edge_dim] - self.edge_mean) / self.edge_std
+        # Normalize continuous edge features with robust bounds [-10, 10]
+        norm_edge = torch.clamp((data_norm.edge_attr[:, :self.continuous_edge_dim] - self.edge_mean) / self.edge_std, -10.0, 10.0)
         data_norm.edge_attr = torch.cat([norm_edge, data_norm.edge_attr[:, self.continuous_edge_dim:]], dim=1)
 
         return data_norm
@@ -249,6 +249,8 @@ def scenario_to_pyg_data(scenario: Dict[str, Any], config: Dict[str, Any]) -> Da
             u = bus_id_map[int(trafo_data["from_bus"][i])]
             v = bus_id_map[int(trafo_data["to_bus"][i])]
             sn_mva = float(trafo_data["sn_mva"][i])
+            # Normalize transformer MVA to equivalent line current rating (kA) scale
+            trafo_i_ka = float(min(2.5, max(0.2, sn_mva / 200.0)))
             loading = float(trafo_data["loading_percent"][i])
             in_svc = float(trafo_data["in_service"][i])
             margin = (100.0 * line_limit_factor) - loading if include_delta else None
@@ -256,7 +258,7 @@ def scenario_to_pyg_data(scenario: Dict[str, Any], config: Dict[str, Any]) -> Da
             # Forward
             edge_src.append(u)
             edge_dst.append(v)
-            fwd_cont = [0.0, 0.0, loading, 0.0, 0.05, sn_mva]
+            fwd_cont = [0.0, 0.0, loading, 0.0, 0.05, trafo_i_ka]
             if include_delta:
                 fwd_cont.append(margin)
             edge_continuous_list.append(fwd_cont)
@@ -265,7 +267,7 @@ def scenario_to_pyg_data(scenario: Dict[str, Any], config: Dict[str, Any]) -> Da
             # Reverse
             edge_src.append(v)
             edge_dst.append(u)
-            rev_cont = [0.0, 0.0, loading, 0.0, 0.05, sn_mva]
+            rev_cont = [0.0, 0.0, loading, 0.0, 0.05, trafo_i_ka]
             if include_delta:
                 rev_cont.append(margin)
             edge_continuous_list.append(rev_cont)

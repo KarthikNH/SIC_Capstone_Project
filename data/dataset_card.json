@@ -26,6 +26,23 @@
     "non_converged_power_flow": 0,
     "islanded_topologies": 0
   },
+  "split_sizes": {
+    "random": {
+      "train": 350,
+      "val": 75,
+      "test": 75
+    },
+    "contingency_held_out": {
+      "train": 336,
+      "val": 62,
+      "test": 102
+    },
+    "operating_point_held_out": {
+      "train": 340,
+      "val": 60,
+      "test": 100
+    }
+  },
   "contingency_distribution": {
     "N-1_line": {
       "count": 345,
@@ -84,6 +101,24 @@
     ]
   },
   "splits_and_leakage_audit": {
+    "headline_split": "random",
+    "split_sizes": {
+      "random": {
+        "train": 350,
+        "val": 75,
+        "test": 75
+      },
+      "contingency_held_out": {
+        "train": 336,
+        "val": 62,
+        "test": 102
+      },
+      "operating_point_held_out": {
+        "train": 340,
+        "val": 60,
+        "test": 100
+      }
+    },
     "split_definitions": {
       "random": "Stratified random split (70% train / 15% val / 15% test) matching overall cascade class balance.",
       "contingency_held_out": "Grouped split where unique contingency elements in test and val NEVER appear in train.",
@@ -93,61 +128,79 @@
       "random": {
         "train": {
           "total": 350,
+          "percentage": 70.0,
           "positive_cascade": 122,
           "negative_safe": 228,
-          "cascade_rate": 0.3486
+          "cascade_rate": 0.3486,
+          "unique_contingencies": 121
         },
         "val": {
           "total": 75,
+          "percentage": 15.0,
           "positive_cascade": 26,
           "negative_safe": 49,
-          "cascade_rate": 0.3467
+          "cascade_rate": 0.3467,
+          "unique_contingencies": 47
         },
         "test": {
           "total": 75,
+          "percentage": 15.0,
           "positive_cascade": 26,
           "negative_safe": 49,
-          "cascade_rate": 0.3467
+          "cascade_rate": 0.3467,
+          "unique_contingencies": 52
         }
       },
       "contingency_held_out": {
         "train": {
           "total": 336,
+          "percentage": 67.2,
           "positive_cascade": 116,
           "negative_safe": 220,
-          "cascade_rate": 0.3452
+          "cascade_rate": 0.3452,
+          "unique_contingencies": 99
         },
         "val": {
           "total": 62,
+          "percentage": 12.4,
           "positive_cascade": 21,
           "negative_safe": 41,
-          "cascade_rate": 0.3387
+          "cascade_rate": 0.3387,
+          "unique_contingencies": 23
         },
         "test": {
           "total": 102,
+          "percentage": 20.4,
           "positive_cascade": 37,
           "negative_safe": 65,
-          "cascade_rate": 0.3627
+          "cascade_rate": 0.3627,
+          "unique_contingencies": 31
         }
       },
       "operating_point_held_out": {
         "train": {
           "total": 340,
+          "percentage": 68.0,
           "positive_cascade": 69,
           "negative_safe": 271,
-          "cascade_rate": 0.2029
+          "cascade_rate": 0.2029,
+          "unique_contingencies": 121
         },
         "val": {
           "total": 60,
+          "percentage": 12.0,
           "positive_cascade": 12,
           "negative_safe": 48,
-          "cascade_rate": 0.2
+          "cascade_rate": 0.2,
+          "unique_contingencies": 45
         },
         "test": {
           "total": 100,
+          "percentage": 20.0,
           "positive_cascade": 93,
           "negative_safe": 7,
-          "cascade_rate": 0.93
+          "cascade_rate": 0.93,
+          "unique_contingencies": 52
         }
       }
     },

@@ -47,6 +47,25 @@ from src.topology import compute_grid_topology
 logger = logging.getLogger("gridwatch.chat")
 logger.setLevel(logging.INFO)
 
+def format_outaged_ieee_names(grid_id: str, outaged: List[str]) -> str:
+    try:
+        net = load_grid_by_id(grid_id)
+        names = []
+        for el in outaged:
+            if el.startswith("line_"):
+                idx = int(el.replace("line_", ""))
+                if idx in net.line.index:
+                    fb = int(net.line.at[idx, "from_bus"]) + 1
+                    tb = int(net.line.at[idx, "to_bus"]) + 1
+                    names.append(f"Line {fb}-{tb}")
+                else:
+                    names.append(el)
+            else:
+                names.append(el)
+        return " + ".join(names)
+    except Exception:
+        return " + ".join(outaged)
+
 # Rate limiting storage: ip -> list of timestamps
 _RATE_LIMIT_BUCKETS: Dict[str, List[float]] = defaultdict(list)
 RATE_LIMIT_MAX_PER_MINUTE = 30
@@ -286,13 +305,14 @@ async def generate_offline_chat_stream(
         top_group = max(group_contribs.items(), key=lambda x: x[1])[0] if group_contribs else "Thermal Loading"
         group_pct = round(group_contribs.get(top_group, 0.4) * 100, 1)
         top_lines = ", ".join([f"{b['name']} ({round(b['loading_percent'], 1)}% loading)" for b in pred.get("top_influential_branches", [])[:3]]) or "critical transmission corridors"
+        outage_display = format_outaged_ieee_names(grid_id, outaged)
 
         reply = (
             f"**Early Warning Diagnostic ({grid_id.upper()})**:\n\n"
             f"- **Predicted Risk**: **{prob}%** (**{alert} Alert**)\n"
             f"- **Primary Stress Drivers**: Critical bottlenecks on {top_lines}.\n"
             f"- **Dominant Feature Contribution**: **{top_group.replace('_', ' ').title()}** ({group_pct}% weight).\n\n"
-            f"**Operator Context**: Initial contingency on `{outaged}` forced immediate power rerouting. "
+            f"**Operator Context**: Initial contingency on `{outage_display}` forced immediate power rerouting. "
             "Under current load scaling, downstream lines exceed continuous capacity, creating propagation risk.\n\n"
             "> *Strict Zero-Leakage: This prediction is generated strictly from the t=0+ post-contingency state.*"
         )

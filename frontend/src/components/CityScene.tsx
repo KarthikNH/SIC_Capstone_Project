@@ -14,6 +14,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import type { Bus, Branch, BusLayout } from '../types';
+import { useGridStore } from '../store';
 
 // ---- Palette ---------------------------------------------------------------
 const C_GROUND      = new THREE.Color('#eef2f8');
@@ -47,7 +48,7 @@ function busShortLabel(bus: Bus): string {
     : bus.type === 'slack'      ? 'REF'
     : bus.type === 'substation' ? 'SUB'
     : 'BUS';
-  return `${prefix}-${String(bus.id).padStart(2, '0')}`;
+  return `${prefix} ${bus.id + 1}`;
 }
 
 function busFullDetail(bus: Bus, hasSingleVoltage: boolean): string {
@@ -180,10 +181,11 @@ const BuildingCluster: React.FC<{
   isIsolated: boolean;
   isHovered: boolean;
   detailLevel?: 'low' | 'high';
+  opacity?: number;
   onClick: () => void;
   onPointerOver: (e: any) => void;
   onPointerOut: () => void;
-}> = ({ pos, loadMw, maxLoad, isIsolated, isHovered, detailLevel = 'high', onClick, onPointerOver, onPointerOut }) => {
+}> = ({ pos, loadMw, maxLoad, isIsolated, isHovered, detailLevel = 'high', opacity = 1.0, onClick, onPointerOver, onPointerOut }) => {
   const norm = Math.max(0, Math.min(1, loadMw / Math.max(1, maxLoad)));
   const mainH = 0.25 + norm * 1.55;
   const fp = 0.22 + norm * 0.18;
@@ -200,26 +202,38 @@ const BuildingCluster: React.FC<{
     return detailLevel === 'low' ? list.slice(0, 1) : list;
   }, [mainH, fp, sx, detailLevel]);
 
+  const isTrans = opacity < 0.999;
+
   return (
     <group position={[pos.x, 0, pos.y]} onClick={onClick} onPointerOver={onPointerOver} onPointerOut={onPointerOut}>
       {offsets.map(([ox, h, f, bright], i) => (
-        <mesh key={i} position={[ox, h / 2, i === 2 ? 0.12 : 0]} castShadow receiveShadow>
+        <mesh
+          key={i}
+          position={[ox, h / 2, i === 2 ? 0.12 : 0]}
+          castShadow={!isTrans}
+          receiveShadow={!isTrans}
+          renderOrder={isTrans ? 10 : 0}
+        >
           <boxGeometry args={[f, h, f]} />
           <meshStandardMaterial
             color={new THREE.Color().copy(tint).offsetHSL(0, 0, (bright - 1) * 0.12)}
             roughness={0.8}
+            transparent={isTrans}
+            opacity={opacity}
+            depthWrite={!isTrans}
           />
         </mesh>
       ))}
-      {!isIsolated && mainH > 0.4 && (
-        <mesh position={[0, mainH / 2, fp / 2 + 0.002]}>
+      {!isIsolated && mainH > 0.4 && opacity > 0.05 && (
+        <mesh position={[0, mainH / 2, fp / 2 + 0.002]} renderOrder={isTrans ? 12 : 1}>
           <planeGeometry args={[fp * 0.76, mainH * 0.82]} />
           <meshStandardMaterial
             color={C_WIN_ON}
             emissive={C_WIN_ON}
-            emissiveIntensity={0.15}
+            emissiveIntensity={0.15 * opacity}
             transparent
-            opacity={0.65}
+            opacity={0.65 * opacity}
+            depthWrite={false}
           />
         </mesh>
       )}
@@ -232,48 +246,81 @@ const SubstationYard: React.FC<{
   pos: THREE.Vector2;
   isHovered: boolean;
   isOutaged: boolean;
+  isIsolated?: boolean;
+  opacity?: number;
   onClick: () => void;
   onPointerOver: (e: any) => void;
   onPointerOut: () => void;
-}> = ({ pos, isHovered, isOutaged, onClick, onPointerOver, onPointerOut }) => (
-  <group position={[pos.x, 0, pos.y]} onClick={onClick} onPointerOver={onPointerOver} onPointerOut={onPointerOut}>
-    <mesh position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-      <planeGeometry args={[0.65, 0.55]} />
-      <meshStandardMaterial color={isHovered ? '#d8dce2' : C_YARD} roughness={0.9} />
-    </mesh>
-    {/* Fence walls */}
-    {([[-0.325, 0.045, 0, 0.01, 0.09, 0.55],
-       [ 0.325, 0.045, 0, 0.01, 0.09, 0.55],
-       [0, 0.045, -0.275, 0.65, 0.09, 0.01],
-       [0, 0.045,  0.275, 0.65, 0.09, 0.01]] as [number,number,number,number,number,number][]).map(
-      ([x, y, z, w, h, d], i) => (
-        <mesh key={i} position={[x, y, z]}>
-          <boxGeometry args={[w, h, d]} />
-          <meshStandardMaterial color={C_FENCE} roughness={0.95} />
-        </mesh>
-      )
-    )}
-    {/* Transformer boxes */}
-    {([-0.15, 0.05, 0.15] as number[]).map((tx, i) => (
-      <mesh key={i} position={[tx, 0.09, (i === 2 ? 0.1 : 0)]} castShadow>
-        <boxGeometry args={[0.11, 0.18, 0.13]} />
+}> = ({ pos, isHovered, isOutaged, isIsolated, opacity = 1.0, onClick, onPointerOver, onPointerOut }) => {
+  const isTrans = opacity < 0.999 || Boolean(isIsolated);
+  const effOpacity = (isIsolated ? 0.35 : 1.0) * opacity;
+
+  return (
+    <group
+      position={[pos.x, 0, pos.y]}
+      onClick={onClick}
+      onPointerOver={onPointerOver}
+      onPointerOut={onPointerOut}
+    >
+      <mesh position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={isTrans ? 10 : 0}>
+        <planeGeometry args={[0.65, 0.55]} />
         <meshStandardMaterial
-          color={isOutaged ? '#c8443b' : C_TRANSFORMER}
-          roughness={0.7}
-          emissive={isOutaged ? new THREE.Color('#7a2020') : new THREE.Color('#000000')}
-          emissiveIntensity={isOutaged ? 0.35 : 0}
+          color={isIsolated ? '#8a9099' : isHovered ? '#d8dce2' : C_YARD}
+          roughness={0.9}
+          transparent={isTrans}
+          opacity={effOpacity}
+          depthWrite={!isTrans}
         />
       </mesh>
-    ))}
-    {/* Bushing insulators */}
-    {([-0.15, 0.05] as number[]).map((tx, i) => (
-      <mesh key={i} position={[tx, 0.215, 0]}>
-        <cylinderGeometry args={[0.014, 0.014, 0.055, 8]} />
-        <meshStandardMaterial color="#e0e0e0" roughness={0.5} />
-      </mesh>
-    ))}
-  </group>
-);
+      {/* Fence walls */}
+      {([[-0.325, 0.045, 0, 0.01, 0.09, 0.55],
+         [ 0.325, 0.045, 0, 0.01, 0.09, 0.55],
+         [0, 0.045, -0.275, 0.65, 0.09, 0.01],
+         [0, 0.045,  0.275, 0.65, 0.09, 0.01]] as [number,number,number,number,number,number][]).map(
+        ([x, y, z, w, h, d], i) => (
+          <mesh key={i} position={[x, y, z]} renderOrder={isTrans ? 10 : 0}>
+            <boxGeometry args={[w, h, d]} />
+            <meshStandardMaterial
+              color={C_FENCE}
+              roughness={0.95}
+              transparent={isTrans}
+              opacity={effOpacity}
+              depthWrite={!isTrans}
+            />
+          </mesh>
+        )
+      )}
+      {/* Transformer boxes */}
+      {([-0.15, 0.05, 0.15] as number[]).map((tx, i) => (
+        <mesh key={i} position={[tx, 0.09, (i === 2 ? 0.1 : 0)]} castShadow={!isTrans} renderOrder={isTrans ? 10 : 0}>
+          <boxGeometry args={[0.11, 0.18, 0.13]} />
+          <meshStandardMaterial
+            color={isIsolated ? '#7a8490' : isOutaged ? '#c8443b' : C_TRANSFORMER}
+            roughness={0.7}
+            transparent={isTrans}
+            opacity={effOpacity}
+            depthWrite={!isTrans}
+            emissive={!isIsolated && isOutaged ? new THREE.Color('#7a2020') : new THREE.Color('#000000')}
+            emissiveIntensity={!isIsolated && isOutaged ? 0.35 * opacity : 0}
+          />
+        </mesh>
+      ))}
+      {/* Bushing insulators */}
+      {([-0.15, 0.05] as number[]).map((tx, i) => (
+        <mesh key={i} position={[tx, 0.215, 0]} renderOrder={isTrans ? 10 : 0}>
+          <cylinderGeometry args={[0.014, 0.014, 0.055, 8]} />
+          <meshStandardMaterial
+            color="#e0e0e0"
+            roughness={0.5}
+            transparent={isTrans}
+            opacity={effOpacity}
+            depthWrite={!isTrans}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+};
 
 // ---- Generator plant -------------------------------------------------------
 const GeneratorPlant: React.FC<{
@@ -281,30 +328,38 @@ const GeneratorPlant: React.FC<{
   genMw: number;
   isHovered: boolean;
   isOutaged: boolean;
+  isIsolated?: boolean;
+  opacity?: number;
   onClick: () => void;
   onPointerOver: (e: any) => void;
   onPointerOut: () => void;
-}> = ({ pos, genMw, isHovered, isOutaged, onClick, onPointerOver, onPointerOut }) => {
+}> = ({ pos, genMw, isHovered, isOutaged, isIsolated, opacity = 1.0, onClick, onPointerOver, onPointerOut }) => {
   const norm = Math.max(0.15, Math.min(1, genMw / 200));
   const hallH = 0.28 + norm * 0.32;
+  const isTrans = opacity < 0.999 || Boolean(isIsolated);
+  const effOpacity = (isIsolated ? 0.35 : 1.0) * opacity;
+
   return (
     <group position={[pos.x, 0, pos.y]} onClick={onClick} onPointerOver={onPointerOver} onPointerOut={onPointerOut}>
-      <mesh position={[0, hallH / 2, 0]} castShadow>
+      <mesh position={[0, hallH / 2, 0]} castShadow={!isTrans} renderOrder={isTrans ? 10 : 0}>
         <boxGeometry args={[0.55, hallH, 0.35]} />
         <meshStandardMaterial
-          color={isHovered ? new THREE.Color().copy(C_PLANT).offsetHSL(0, 0, 0.06) : C_PLANT}
+          color={isIsolated ? '#7a8490' : isHovered ? new THREE.Color().copy(C_PLANT).offsetHSL(0, 0, 0.06) : C_PLANT}
           roughness={0.85}
-          emissive={isOutaged ? new THREE.Color('#7a2020') : new THREE.Color('#000000')}
-          emissiveIntensity={isOutaged ? 0.35 : 0}
+          transparent={isTrans}
+          opacity={effOpacity}
+          depthWrite={!isTrans}
+          emissive={!isIsolated && isOutaged ? new THREE.Color('#7a2020') : new THREE.Color('#000000')}
+          emissiveIntensity={!isIsolated && isOutaged ? 0.35 * opacity : 0}
         />
       </mesh>
-      <mesh position={[0.2, hallH + 0.22, -0.08]} castShadow>
+      <mesh position={[0.2, hallH + 0.22, -0.08]} castShadow={!isTrans} renderOrder={isTrans ? 10 : 0}>
         <cylinderGeometry args={[0.044, 0.06, 0.44, 8]} />
-        <meshStandardMaterial color={C_CHIMNEY} roughness={0.9} />
+        <meshStandardMaterial color={C_CHIMNEY} roughness={0.9} transparent={isTrans} opacity={effOpacity} depthWrite={!isTrans} />
       </mesh>
-      <mesh position={[-0.2, 0.12, 0.05]} castShadow>
+      <mesh position={[-0.2, 0.12, 0.05]} castShadow={!isTrans} renderOrder={isTrans ? 10 : 0}>
         <boxGeometry args={[0.18, 0.24, 0.22]} />
-        <meshStandardMaterial color={C_BLDG_DARK} roughness={0.9} />
+        <meshStandardMaterial color={C_BLDG_DARK} roughness={0.9} transparent={isTrans} opacity={effOpacity} depthWrite={!isTrans} />
       </mesh>
     </group>
   );
@@ -373,24 +428,50 @@ const CableBranch: React.FC<{
   isOutaged: boolean;
   isHovered: boolean;
   detailLevel?: 'low' | 'high';
+  isNewlyTripped?: boolean;
+  isPreviouslyTripped?: boolean;
+  isOverloaded?: boolean;
   onClick: (shiftKey: boolean) => void;
   onPointerOver: (e: any) => void;
   onPointerOut: () => void;
-}> = ({ branch, posA, posB, loading, isOutaged, isHovered, detailLevel = 'high', onClick, onPointerOver, onPointerOut }) => {
+}> = ({
+  branch,
+  posA,
+  posB,
+  loading,
+  isOutaged,
+  isHovered,
+  detailLevel = 'high',
+  isNewlyTripped = false,
+  isPreviouslyTripped = false,
+  isOverloaded = false,
+  onClick,
+  onPointerOver,
+  onPointerOut
+}) => {
   const dx = posB.x - posA.x;
   const dz = posB.y - posA.y;
   const dist = Math.sqrt(dx * dx + dz * dz);
   if (dist < 0.02) return null;
 
-  const cableColor =
-    isOutaged      ? C_CABLE_OUT.clone()
-    : loading >= 100 ? C_CABLE_OV.clone()
-    : loading >= 65  ? C_CABLE_ST.clone()
-    : isHovered    ? new THREE.Color().copy(C_CABLE).offsetHSL(0, 0, 0.18)
+  const cableColor = isNewlyTripped
+    ? new THREE.Color('#ef4444')
+    : isPreviouslyTripped
+    ? new THREE.Color('#6b7280')
+    : isOutaged
+    ? C_CABLE_OUT.clone()
+    : isOverloaded || loading >= 100
+    ? C_CABLE_OV.clone()
+    : loading >= 65
+    ? C_CABLE_ST.clone()
+    : isHovered
+    ? new THREE.Color().copy(C_CABLE).offsetHSL(0, 0, 0.18)
     : C_CABLE.clone();
 
   const isTransformer = branch.is_transformer;
-  const sag = isOutaged ? 0.08 + dist * 0.12 : 0.06 + dist * 0.055;
+  const sag = (isOutaged || isNewlyTripped || isPreviouslyTripped)
+    ? 0.08 + dist * 0.12
+    : 0.06 + dist * 0.055;
   const numPylons = isTransformer
     ? 0
     : detailLevel === 'low'
@@ -432,8 +513,6 @@ const CableBranch: React.FC<{
 
   const midX = (posA.x + posB.x) / 2;
   const midZ = (posA.y + posB.y) / 2;
-  const hitW = Math.max(0.05, Math.abs(dx));
-  const hitD = Math.max(0.05, Math.abs(dz));
 
   return (
     <group>
@@ -445,18 +524,43 @@ const CableBranch: React.FC<{
       ))}
       {cableTubes.map((geo, i) => (
         <mesh key={i} geometry={geo}>
-          <meshStandardMaterial color={cableColor} roughness={0.7} metalness={0.15} />
+          <meshStandardMaterial
+            color={cableColor}
+            roughness={0.7}
+            metalness={0.15}
+            emissive={isOverloaded ? new THREE.Color('#d97706') : isNewlyTripped ? new THREE.Color('#ef4444') : new THREE.Color('#000000')}
+            emissiveIntensity={isOverloaded ? 0.45 : isNewlyTripped ? 0.55 : 0}
+          />
         </mesh>
       ))}
+
+      {/* Tripped Marker Label */}
+      {isNewlyTripped && (
+        <Html position={[midX, PYLON_H + 0.18, midZ]} center distanceFactor={14}>
+          <div className="px-1.5 py-0.5 bg-red text-white text-[9.5px] font-bold font-mono border border-white shadow-md animate-pulse whitespace-nowrap pointer-events-none">
+            TRIPPED
+          </div>
+        </Html>
+      )}
+
+      {/* Previously Tripped 'X' Marker */}
+      {isPreviouslyTripped && (
+        <Html position={[midX, PYLON_H + 0.12, midZ]} center distanceFactor={14}>
+          <div className="w-4 h-4 rounded-full bg-white/95 border border-[#6b7280] text-[#4b5563] text-[10px] font-mono font-black flex items-center justify-center shadow-xs pointer-events-none">
+            ✕
+          </div>
+        </Html>
+      )}
+
       {/* Wide invisible hit area */}
       <mesh
         position={[midX, 0.35, midZ]}
         onClick={e => { e.stopPropagation(); onClick(e.nativeEvent?.shiftKey ?? false); }}
         onPointerOver={e => { e.stopPropagation(); onPointerOver(e); }}
-        onPointerOut={onPointerOut}
+        onPointerOut={() => onPointerOut()}
       >
-        <boxGeometry args={[hitW + 0.15, 0.55, hitD + 0.15]} />
-        <meshBasicMaterial transparent opacity={0.0001} depthWrite={false} />
+        <cylinderGeometry args={[0.2, 0.2, Math.max(0.2, dist), 6]} />
+        <meshBasicMaterial transparent opacity={0.001} depthWrite={false} />
       </mesh>
     </group>
   );
@@ -535,11 +639,15 @@ const CityLabel: React.FC<{
 const CityCameraController: React.FC<{
   gridRadius: number;
   cameraResetTrigger: number;
-}> = ({ gridRadius, cameraResetTrigger }) => {
+  framingCentroid?: [number, number, number] | null;
+  reducedMotion?: boolean;
+}> = ({ gridRadius, cameraResetTrigger, framingCentroid, reducedMotion }) => {
   const controlsRef = useRef<any>(null);
   const { camera } = useThree();
   const r = Math.max(4, gridRadius);
   const isUserInteracting = useRef(false);
+  const framingTarget = useRef<THREE.Vector3 | null>(null);
+  const framingStartTime = useRef<number>(0);
 
   // Isometric framed distance with padding so the whole city fits in viewport comfortably
   const frameCam = useCallback(() => {
@@ -547,6 +655,7 @@ const CityCameraController: React.FC<{
     camera.position.set(r * 1.75, r * 1.6, r * 1.75);
     controlsRef.current.target.set(0, 0, 0);
     controlsRef.current.update();
+    framingTarget.current = null;
   }, [camera, r]);
 
   useEffect(() => {
@@ -559,6 +668,28 @@ const CityCameraController: React.FC<{
     controlsRef.current.maxDistance = r * 8.0;
     controlsRef.current.update();
   }, [r]);
+
+  // Gentle framing when new line trips
+  useEffect(() => {
+    if (framingCentroid && !reducedMotion && !isUserInteracting.current) {
+      framingTarget.current = new THREE.Vector3(framingCentroid[0], 0, framingCentroid[2]);
+      framingStartTime.current = performance.now() / 1000;
+    } else {
+      framingTarget.current = null;
+    }
+  }, [framingCentroid, reducedMotion]);
+
+  useFrame((_, delta) => {
+    if (controlsRef.current && framingTarget.current && !isUserInteracting.current) {
+      const elapsed = performance.now() / 1000 - framingStartTime.current;
+      if (elapsed < 1.8) {
+        controlsRef.current.target.lerp(framingTarget.current, Math.min(1, delta * 2.2));
+        controlsRef.current.update();
+      } else {
+        framingTarget.current = null;
+      }
+    }
+  });
 
   return (
     <OrbitControls
@@ -574,7 +705,10 @@ const CityCameraController: React.FC<{
       maxDistance={r * 8.0}
       maxPolarAngle={Math.PI / 2.05}
       minPolarAngle={0.08}
-      onStart={() => { isUserInteracting.current = true; }}
+      onStart={() => {
+        isUserInteracting.current = true;
+        framingTarget.current = null;
+      }}
       onEnd={() => { isUserInteracting.current = false; }}
     />
   );
@@ -595,6 +729,13 @@ interface SceneProps {
   hoveredBusId: number | null;
   detailLevel: 'low' | 'high';
   labelMode: 'smart' | 'all' | 'off';
+  buildingsOpacity?: number;
+  applyToStructures?: boolean;
+  newlyTrippedBranchIds?: Set<number>;
+  previouslyTrippedBranchIds?: Set<number>;
+  overloadedBranchIds?: Set<number>;
+  framingCentroid?: [number, number, number] | null;
+  reducedMotion?: boolean;
   onClickBranch: (br: Branch, isShift?: boolean) => void;
   onHoverBranch: (br: Branch | null, e?: any) => void;
   onClickBus: (bus: Bus, isShift?: boolean) => void;
@@ -608,6 +749,13 @@ const CitySceneInner: React.FC<SceneProps> = ({
   hoveredBranchId, hoveredBusId,
   detailLevel,
   labelMode,
+  buildingsOpacity = 100,
+  applyToStructures = false,
+  newlyTrippedBranchIds,
+  previouslyTrippedBranchIds,
+  overloadedBranchIds,
+  framingCentroid,
+  reducedMotion,
   onClickBranch, onHoverBranch, onClickBus, onHoverBus,
 }) => {
   const { camera, size } = useThree();
@@ -835,13 +983,23 @@ const CitySceneInner: React.FC<SceneProps> = ({
       <fog attach="fog" args={['#eef2f8', gridRadius * 2.8, gridRadius * 9.5]} />
 
       <GroundPlane size={gridRadius * 2.5} />
-      <CityCameraController gridRadius={gridRadius} cameraResetTrigger={cameraResetTrigger} />
+      <CityCameraController
+        gridRadius={gridRadius}
+        cameraResetTrigger={cameraResetTrigger}
+        framingCentroid={framingCentroid}
+        reducedMotion={reducedMotion}
+      />
 
       {/* Branches */}
       {branches.map(br => {
         const pa = busPos[br.from_bus];
         const pb = busPos[br.to_bus];
         if (!pa || !pb) return null;
+        const isNewlyTripped = newlyTrippedBranchIds?.has(br.id) ?? false;
+        const isPrevTripped = previouslyTrippedBranchIds?.has(br.id) ?? false;
+        const isOverloaded = overloadedBranchIds?.has(br.id) ?? false;
+        const isOut = outagedLines.includes(br.id) || isNewlyTripped || isPrevTripped;
+
         return (
           <CableBranch
             key={`br-${br.id}`}
@@ -849,9 +1007,12 @@ const CitySceneInner: React.FC<SceneProps> = ({
             posA={pa}
             posB={pb}
             loading={branchLoading[String(br.id)] ?? 35}
-            isOutaged={outagedLines.includes(br.id)}
+            isOutaged={isOut}
             isHovered={hoveredBranchId === br.id}
             detailLevel={detailLevel}
+            isNewlyTripped={isNewlyTripped}
+            isPreviouslyTripped={isPrevTripped}
+            isOverloaded={isOverloaded}
             onClick={(isShift) => onClickBranch(br, isShift)}
             onPointerOver={e => onHoverBranch(br, e)}
             onPointerOut={() => onHoverBranch(null)}
@@ -869,6 +1030,8 @@ const CitySceneInner: React.FC<SceneProps> = ({
         const isOutagedEnd = outagedEndBusIds.has(bus.id);
         const isVisible  = visibleBusIds.has(bus.id);
         const isDetailed = isHovered || isOutagedEnd;
+        const bldgOpacity = Math.max(0, Math.min(1, buildingsOpacity / 100));
+        const structOpacity = applyToStructures ? bldgOpacity : 1.0;
 
         return (
           <React.Fragment key={`bus-${bus.id}`}>
@@ -877,6 +1040,7 @@ const CitySceneInner: React.FC<SceneProps> = ({
                 pos={pos} loadMw={bus.base_p_mw || 0} maxLoad={maxLoad}
                 isIsolated={isIsolated} isHovered={isHovered}
                 detailLevel={detailLevel}
+                opacity={bldgOpacity}
                 onClick={() => onClickBus(bus)}
                 onPointerOver={e => onHoverBus(bus, e)}
                 onPointerOut={() => onHoverBus(null)}
@@ -884,7 +1048,8 @@ const CitySceneInner: React.FC<SceneProps> = ({
             )}
             {bus.type === 'substation' && (
               <SubstationYard
-                pos={pos} isHovered={isHovered} isOutaged={isGenOut}
+                pos={pos} isHovered={isHovered} isOutaged={isGenOut} isIsolated={isIsolated}
+                opacity={structOpacity}
                 onClick={() => onClickBus(bus)}
                 onPointerOver={e => onHoverBus(bus, e)}
                 onPointerOut={() => onHoverBus(null)}
@@ -893,7 +1058,8 @@ const CitySceneInner: React.FC<SceneProps> = ({
             {bus.type === 'generator' && (
               <GeneratorPlant
                 pos={pos} genMw={bus.gen_p_mw || 50}
-                isHovered={isHovered} isOutaged={isGenOut}
+                isHovered={isHovered} isOutaged={isGenOut} isIsolated={isIsolated}
+                opacity={structOpacity}
                 onClick={() => onClickBus(bus)}
                 onPointerOver={e => onHoverBus(bus, e)}
                 onPointerOut={() => onHoverBus(null)}
@@ -979,23 +1145,63 @@ export interface CitySceneProps {
   onHoverBus: (bus: Bus | null, e?: any) => void;
   hoveredBranchId: number | null;
   hoveredBusId: number | null;
+  newlyTrippedBranchIds?: Set<number>;
+  previouslyTrippedBranchIds?: Set<number>;
+  overloadedBranchIds?: Set<number>;
+  framingCentroid?: [number, number, number] | null;
 }
 
 export const CityScene: React.FC<CitySceneProps> = ({
   buses, branches, layoutMap,
   outagedLines, outagedGens, branchLoading, activeIsolatedBuses,
   gridRadius, cameraResetTrigger,
+  reducedMotion, canvasWrapperRef,
   onClickBranch, onHoverBranch, onClickBus, onHoverBus,
   hoveredBranchId, hoveredBusId,
+  newlyTrippedBranchIds,
+  previouslyTrippedBranchIds,
+  overloadedBranchIds,
+  framingCentroid,
 }) => {
   const [detailLevel, setDetailLevel] = useState<'low' | 'high'>(() => (buses.length > 150 ? 'low' : 'high'));
-  const [labelMode, setLabelMode] = useState<'smart' | 'all' | 'off'>('smart');
+  const {
+    labelMode,
+    setLabelMode,
+    buildingsOpacity,
+    setBuildingsOpacity,
+    applyToStructures,
+    setApplyToStructures,
+  } = useGridStore();
   const r = Math.max(4, gridRadius);
 
   return (
-    <div className="relative w-full h-full bg-[#eef2f8]">
-      {/* Top-Right Controls: Labels Mode & Detail */}
+    <div ref={canvasWrapperRef} className="relative w-full h-full bg-[#eef2f8]">
+      {/* Top-Right Controls: Opacity Slider, Labels Mode & Detail */}
       <div className="absolute top-3 right-3 z-30 flex items-center gap-2 select-none">
+        {/* Buildings Opacity Slider & Structures Option */}
+        <div className="flex items-center gap-2 bg-white/95 backdrop-blur-md border border-[#cfd3d8] shadow-2xs px-2.5 py-1 text-xs">
+          <span className="text-[10px] uppercase font-mono tracking-wider text-[#666]">Opacity</span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={buildingsOpacity}
+            onChange={(e) => setBuildingsOpacity(Number(e.target.value))}
+            className="w-20 h-1.5 accent-charcoal cursor-pointer"
+            title={`Buildings opacity: ${buildingsOpacity}%`}
+          />
+          <span className="text-[10px] font-mono text-charcoal w-7 text-right">{buildingsOpacity}%</span>
+          <label className="flex items-center gap-1 pl-1.5 border-l border-[#cfd3d8] cursor-pointer text-[10px] text-[#555] hover:text-ink">
+            <input
+              type="checkbox"
+              checked={applyToStructures}
+              onChange={(e) => setApplyToStructures(e.target.checked)}
+              className="accent-charcoal cursor-pointer rounded-xs"
+            />
+            <span>Structures</span>
+          </label>
+        </div>
+
         {/* Labels: Smart | All | Off */}
         <div className="flex items-center bg-white/95 backdrop-blur-md border border-[#cfd3d8] shadow-2xs p-0.5 text-xs">
           <span className="px-2 py-0.5 text-[10px] uppercase font-mono tracking-wider text-[#666]">Labels</span>
@@ -1049,6 +1255,13 @@ export const CityScene: React.FC<CitySceneProps> = ({
           hoveredBranchId={hoveredBranchId} hoveredBusId={hoveredBusId}
           detailLevel={detailLevel}
           labelMode={labelMode}
+          buildingsOpacity={buildingsOpacity}
+          applyToStructures={applyToStructures}
+          newlyTrippedBranchIds={newlyTrippedBranchIds}
+          previouslyTrippedBranchIds={previouslyTrippedBranchIds}
+          overloadedBranchIds={overloadedBranchIds}
+          framingCentroid={framingCentroid}
+          reducedMotion={reducedMotion}
           onClickBranch={onClickBranch} onHoverBranch={onHoverBranch}
           onClickBus={onClickBus} onHoverBus={onHoverBus}
         />

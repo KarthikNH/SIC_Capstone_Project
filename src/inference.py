@@ -151,7 +151,8 @@ def predict(
     outaged_elements: Optional[List[Union[str, int]]] = None,
     load_scale: float = 1.0,
     config: Optional[Dict[str, Any]] = None,
-    include_explainability: bool = True
+    include_explainability: bool = True,
+    modifications: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Run end-to-end GINE early warning prediction for an initial contingency.
@@ -162,17 +163,23 @@ def predict(
         load_scale (float): Load scaling factor (0.6 to 1.2).
         config (Optional[Dict[str, Any]]): Optional config dict.
         include_explainability (bool): Whether to compute counterfactuals, uncertainty, and fidelity.
+        modifications (Optional[Dict[str, Any]]): Optional operational modifications (load_scale, line_ratings).
 
     Returns:
         Dict[str, Any]: Comprehensive early warning prediction payload.
     """
     t_start = time.perf_counter()
 
+    if modifications:
+        if "load_scale" in modifications:
+            load_scale = float(modifications["load_scale"])
+
     if outaged_elements is None or len(outaged_elements) == 0:
         outaged_elements = ["line_0"]
 
     clean_outaged = tuple(sorted(str(e).strip().lower() for e in outaged_elements))
-    cache_key = (grid_case, clean_outaged, round(float(load_scale), 3), include_explainability)
+    mod_key = str(sorted(modifications.items())) if modifications else ""
+    cache_key = (grid_case, clean_outaged, round(float(load_scale), 3), include_explainability, mod_key)
 
     if cache_key in _PREDICT_CACHE:
         cached_result = copy.deepcopy(_PREDICT_CACHE[cache_key])
@@ -188,11 +195,29 @@ def predict(
     except Exception:
         net = pn.case30() if grid_case == "case30" else pn.case118()
 
+    if grid_case == "case118" and hasattr(net, "line") and net.line.max_i_ka.max() > 20.0:
+        rating_factor = cfg.get("grid", {}).get("case118_rating_factor", 1.30)
+        net_copy = copy.deepcopy(net)
+        try:
+            pp.runpp(net_copy, numba=False)
+            net.line["max_i_ka"] = np.maximum(net_copy.res_line.i_ka.values * rating_factor, 0.05)
+        except Exception:
+            pass
+
+    if modifications and "line_ratings" in modifications:
+        for lid, factor in modifications["line_ratings"].items():
+            l_num = int(str(lid).replace("line_", "").replace("branch_", ""))
+            if l_num in net.line.index:
+                net.line.loc[l_num, "max_i_ka"] *= float(factor)
+    if modifications and "line_rating_multiplier" in modifications:
+        mult = float(modifications["line_rating_multiplier"])
+        net.line["max_i_ka"] *= mult
+
     # 2. Scale Load and Redispatch
-    base_load_mw = float(net.load["p_mw"].sum()) if len(net.load) > 0 else 100.0
+    base_load_mw = float(np.nan_to_num(net.load["p_mw"].sum(), nan=100.0)) if len(net.load) > 0 else 100.0
     net.load["p_mw"] *= float(load_scale)
     net.load["q_mvar"] *= float(load_scale)
-    total_pre_load = float(net.load["p_mw"].sum())
+    total_pre_load = float(np.nan_to_num(net.load["p_mw"].sum(), nan=100.0))
 
     if len(net.gen) > 0:
         ratio = total_pre_load / (base_load_mw + 1e-9)
@@ -210,11 +235,11 @@ def predict(
     try:
         pp.runpp(net_pre, numba=False)
         if net_pre.converged and hasattr(net_pre, "res_line") and len(net_pre.res_line) > 0:
-            pre_loadings = net_pre.res_line.loading_percent.values
-            pre_max_loading = round(float(np.max(pre_loadings)), 2)
+            pre_loadings = np.nan_to_num(net_pre.res_line.loading_percent.values, nan=0.0)
+            pre_max_loading = round(float(np.nanmax(pre_loadings)), 2) if len(pre_loadings) > 0 else 0.0
             pre_overloaded_count = int(np.sum(pre_loadings > 100.0))
             for l_idx, p_val in zip(net_pre.line.index, net_pre.res_line.p_from_mw.values):
-                pre_flows_mw[int(l_idx)] = float(p_val)
+                pre_flows_mw[int(l_idx)] = float(np.nan_to_num(p_val, nan=0.0))
     except Exception:
         pass
 
@@ -292,11 +317,12 @@ def predict(
     to_buses = first_state["branch"]["to_bus"]
     loadings = first_state["branch"]["loading_percent"]
 
+    bus_offset = 1 if len(net.bus) > 0 and min(net.bus.index) == 0 else 0
     for i in range(len(line_ids)):
         lid = int(line_ids[i])
-        u, v = int(from_buses[i]), int(to_buses[i])
+        u, v = int(from_buses[i]) + bus_offset, int(to_buses[i]) + bus_offset
         branch_names[lid] = f"Line {u}-{v}"
-        branch_loading_dict[lid] = round(float(loadings[i]), 2)
+        branch_loading_dict[lid] = round(float(np.nan_to_num(loadings[i], nan=0.0)), 2)
         branch_imp_dict[lid] = 0.0
 
     for e_idx in range(edge_idx_np.shape[1]):
@@ -319,18 +345,19 @@ def predict(
         for lid, val in branch_imp_dict.items()
     }
 
-    # Per-bus voltages and violations
+    # Per-bus voltages and violations (using 1-based bus numbers)
     per_bus_voltage = {
-        int(b): round(float(v), 3)
+        int(b) + bus_offset: round(float(np.nan_to_num(v, nan=1.0)), 3)
         for b, v in zip(first_state["bus"]["bus_id"], first_state["bus"]["vm_pu"])
     }
     voltage_violations = [
-        int(b) for b, v in per_bus_voltage.items() if (v < 0.95 or v > 1.05)
+        int(b) + bus_offset for b, v in zip(first_state["bus"]["bus_id"], first_state["bus"]["vm_pu"])
+        if (float(np.nan_to_num(v, nan=1.0)) < 0.95 or float(np.nan_to_num(v, nan=1.0)) > 1.05)
     ]
 
     # Post-contingency overloads and flows
     post_loadings_arr = np.array(list(branch_loading_dict.values()))
-    post_max_loading = round(float(np.max(post_loadings_arr)), 2) if len(post_loadings_arr) > 0 else 0.0
+    post_max_loading = round(float(np.nan_to_num(np.max(post_loadings_arr), nan=0.0)), 2) if len(post_loadings_arr) > 0 else 0.0
     post_overloaded_count = int(np.sum(post_loadings_arr > 100.0))
 
     # MW rerouted calculation: sum(|P_post - P_pre|)
@@ -339,7 +366,7 @@ def predict(
     for idx, lid in enumerate(line_ids):
         lid = int(lid)
         if lid in pre_flows_mw and idx < len(post_p_from):
-            mw_rerouted += abs(float(post_p_from[idx]) - pre_flows_mw[lid])
+            mw_rerouted += abs(float(np.nan_to_num(post_p_from[idx], nan=0.0)) - pre_flows_mw[lid])
 
     # Islanded buses check
     G_post = nx.Graph()
@@ -352,6 +379,7 @@ def predict(
     for comp in nx.connected_components(G_post):
         if not (comp & ext_buses):
             islanded_buses.extend(sorted(list(comp)))
+    islanded_buses = [int(b) + bus_offset for b in islanded_buses]
 
     # 9. Top 3 most influential branches
     sorted_branches = sorted(per_branch_importance.items(), key=lambda x: x[1], reverse=True)
@@ -359,13 +387,14 @@ def predict(
     for lid, imp in sorted_branches[:3]:
         top_3.append({
             "branch_id": lid,
-            "name": branch_names.get(lid, f"Branch {lid}"),
+            "name": branch_names.get(lid, f"Line {lid}"),
             "loading_percent": branch_loading_dict.get(lid, 0.0),
             "importance": imp
         })
 
     # Alert level classification (from validation operating thresholds)
     operating_threshold = 0.35
+    predicted_cascade = bool(prob >= operating_threshold)
     if prob >= 0.70:
         alert_level = "High"
         summary = "Critical: Outage is highly likely to trigger cascading failures and load shedding."
@@ -414,11 +443,29 @@ def predict(
         graph_embedding=graph_embedding
     )
 
-    # 14. Deterministic Plain-Language Narrative
+    # 14. Deterministic Plain-Language Narrative with IEEE line names
+    def format_outaged_elem_name(e):
+        e_str = str(e).lower()
+        if e_str.startswith("line_") or e_str.isdigit():
+            lid = int(e_str.replace("line_", ""))
+            if lid in branch_names:
+                return branch_names[lid]
+            elif lid in net.line.index:
+                u = int(net.line.loc[lid, "from_bus"]) + bus_offset
+                v = int(net.line.loc[lid, "to_bus"]) + bus_offset
+                return f"Line {u}-{v}"
+        elif e_str.startswith("gen_"):
+            gid = int(e_str.replace("gen_", ""))
+            if gid in net.gen.index:
+                gbus = int(net.gen.loc[gid, "bus"]) + bus_offset
+                return f"Gen at Bus {gbus}"
+        return str(e)
+
+    outaged_display_names = [format_outaged_elem_name(e) for e in outaged_elements]
     max_line_name = top_3[0]["name"] if top_3 else "Line"
     num_lines_over_80 = int(np.sum(post_loadings_arr > 80.0))
     narrative = generate_narrative(
-        outaged_elements=[str(e) for e in outaged_elements],
+        outaged_elements=outaged_display_names,
         max_loading_branch_name=max_line_name,
         max_loading_percent=post_max_loading,
         num_lines_over_80=num_lines_over_80,
@@ -433,12 +480,15 @@ def predict(
         "grid_case": grid_case,
         "outaged_elements": list(outaged_elements),
         "load_scale": float(load_scale),
+        "probability": round(prob, 4),
         "cascade_probability": round(prob, 4),
+        "alert_threshold": operating_threshold,
+        "operating_threshold": operating_threshold,
+        "predicted_cascade": predicted_cascade,
         "alert_level": alert_level,
         "summary": summary,
         "narrative": narrative,
         "confidence_margin": confidence_margin,
-        "operating_threshold": operating_threshold,
         "power_flow_converged": converged,
         "total_pre_load_mw": round(total_pre_load, 2),
         "before_after": {

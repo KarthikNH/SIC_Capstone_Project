@@ -97,12 +97,15 @@ export interface PredictResponse {
   grid_case: string;
   outaged_elements: string[];
   load_scale: number;
+  probability?: number;
   cascade_probability: number;
   alert_level: 'Low' | 'Medium' | 'High';
+  alert_threshold?: number;
+  operating_threshold?: number;
+  predicted_cascade?: boolean;
   summary: string;
   narrative?: string;
   confidence_margin?: number;
-  operating_threshold?: number;
   power_flow_converged: boolean;
   total_pre_load_mw: number;
   before_after?: BeforeAfterDelta;
@@ -152,6 +155,10 @@ export interface CascadeReplayStep {
   description: string;
   newly_tripped_branches: number[];
   cumulative_tripped_branches: number[];
+  cumulative_extra_trips?: number;
+  cumulative_load_shed_mw?: number;
+  cumulative_load_shed_fraction?: number;
+  cumulative_isolated_buses?: number[];
   max_loading_percent: number;
   branch_loadings: Record<string, number>;
   bus_voltages: Record<string, number>;
@@ -168,11 +175,87 @@ export interface CascadeReplayResponse {
   load_scale: number;
   total_steps: number;
   cascade: number;
+  actual_cascade?: boolean;
+  cascade_criterion?: 'extra_trips' | 'load_shed' | 'both' | 'diverged' | 'none';
+  criterion_explanation?: string;
+  k_extra_trips?: number;
+  load_shed_threshold?: number;
   additional_trips: number;
   final_load_shed_fraction: number;
   final_load_shed_mw: number;
+  final_isolated_buses_count?: number;
   termination_reason: string;
   steps: CascadeReplayStep[];
+}
+
+export interface SuggestedFix {
+  action_type: string;
+  title: string;
+  description?: string;
+  plain_text: string;
+  label: 'model estimate' | 'simulator verified';
+  disagreement_resolved?: boolean;
+  target_load_scale?: number;
+  before_numbers?: {
+    load_scale?: number;
+    load_pct?: number;
+    risk?: number;
+    risk_pct?: number;
+    cascade?: boolean;
+    status?: string;
+  };
+  after_numbers?: {
+    load_scale?: number;
+    load_pct?: number;
+    risk?: number;
+    risk_pct?: number;
+    cascade?: boolean;
+    status?: string;
+    extra_trips?: number;
+    load_shed_pct?: number;
+  };
+  action?: {
+    type: 'load_scale' | 'modifications';
+    target_value?: number;
+    delta_pct?: number;
+    modifications?: Record<string, any>;
+  };
+  success: boolean;
+  next_best_options?: Array<{
+    title: string;
+    plain_text: string;
+    action?: any;
+  }>;
+}
+
+export interface SplitSubsetStats {
+  total: number;
+  percentage: number;
+  positive_cascade: number;
+  negative_safe: number;
+  cascade_rate: number;
+  unique_contingencies: number;
+}
+
+export interface SplitLeakageAssertion {
+  disjoint_subsets: boolean;
+  complete_coverage: boolean;
+  zero_scenario_leakage: boolean;
+  contingency_overlap_between_train_and_eval: number;
+  contingency_leakage_free: boolean;
+}
+
+export interface DatasetSplitsResponse {
+  headline_split: string;
+  total_scenarios: number;
+  split_definitions: Record<string, string>;
+  class_balance_per_split: Record<string, {
+    train: SplitSubsetStats;
+    val: SplitSubsetStats;
+    test: SplitSubsetStats;
+  }>;
+  leakage_assertions: Record<string, SplitLeakageAssertion>;
+  zero_temporal_leakage_guarantee: string;
 }
 
 export interface BenchmarkRow {
@@ -413,26 +496,24 @@ export interface DatasetCardResponse {
     max_iterations_per_cascade: number;
     convergence_tolerance_mw: number;
   };
+  split_sizes?: Record<string, Record<string, number>>;
   splits_and_leakage_audit: {
-    splits: {
+    headline_split?: string;
+    split_sizes?: Record<string, Record<string, number>>;
+    split_definitions?: Record<string, string>;
+    class_balance_per_split?: Record<string, {
+      train: SplitSubsetStats;
+      val: SplitSubsetStats;
+      test: SplitSubsetStats;
+    }>;
+    leakage_assertions?: Record<string, SplitLeakageAssertion>;
+    zero_temporal_leakage_guarantee?: string;
+    splits?: {
       train: { count: number; percentage: number; cascade_rate: number };
       val: { count: number; percentage: number; cascade_rate: number };
       test: { count: number; percentage: number; cascade_rate: number };
       held_out_contingencies: { count: number; percentage: number; cascade_rate: number };
     };
-    leakage_assertions: {
-      random: { disjoint_subsets: boolean; description: string };
-      contingency_held_out: {
-        contingency_leakage_free: boolean;
-        contingency_overlap_between_train_and_eval: number;
-        description: string;
-      };
-      temporal_leakage: {
-        temporal_leakage_free: boolean;
-        description: string;
-      };
-    };
-    zero_temporal_leakage_guarantee: string;
   };
   data_quality: {
     total_scenarios_attempted: number;
@@ -469,6 +550,8 @@ export interface DatasetSampleResponse {
   cascade_label: number;
   bus_count: number;
   branch_count: number;
+  num_buses?: number;
+  num_branches?: number;
   bus_snapshot: Array<{
     bus_id: number;
     vm_pu: number;

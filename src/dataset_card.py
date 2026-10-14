@@ -227,11 +227,15 @@ def generate_dataset_card() -> Dict[str, Any]:
             neg = int((sub_df["cascade"] == 0).sum())
             total = len(sub_df)
             rate = round(pos / total, 4) if total > 0 else 0.0
+            pct = round(total / total_scenarios * 100.0, 1) if total_scenarios > 0 else 0.0
+            unique_conts = int(sub_df["contingency_id"].nunique()) if "contingency_id" in sub_df.columns else 0
             class_balance_per_split[split_name][subset_name] = {
                 "total": total,
+                "percentage": pct,
                 "positive_cascade": pos,
                 "negative_safe": neg,
-                "cascade_rate": rate
+                "cascade_rate": rate,
+                "unique_contingencies": unique_conts
             }
 
         # Assertions audit for this split
@@ -272,6 +276,14 @@ def generate_dataset_card() -> Dict[str, Any]:
     non_converged_count = int(term_counts.get("power_flow_divergence", 0))
     islanding_count = int(term_counts.get("grid_islanding", 0))
 
+    split_sizes = {
+        split_name: {
+            subset_name: stats["total"]
+            for subset_name, stats in subsets.items()
+        }
+        for split_name, subsets in class_balance_per_split.items()
+    }
+
     card: Dict[str, Any] = {
         "dataset_name": "Gridwatch Power Grid Cascading Failure Dataset",
         "version": "1.0.0",
@@ -300,6 +312,7 @@ def generate_dataset_card() -> Dict[str, Any]:
             "non_converged_power_flow": non_converged_count,
             "islanded_topologies": islanding_count
         },
+        "split_sizes": split_sizes,
         "contingency_distribution": contingency_breakdown,
         "load_range": {
             "min_load_scale": 0.65,
@@ -329,6 +342,8 @@ def generate_dataset_card() -> Dict[str, Any]:
             ]
         },
         "splits_and_leakage_audit": {
+            "headline_split": "random",
+            "split_sizes": split_sizes,
             "split_definitions": {
                 "random": "Stratified random split (70% train / 15% val / 15% test) matching overall cascade class balance.",
                 "contingency_held_out": "Grouped split where unique contingency elements in test and val NEVER appear in train.",
@@ -465,28 +480,37 @@ def get_scenario_sample(scenario_id: int) -> Dict[str, Any]:
     if "branch" in first_state and "line_id" in first_state["branch"]:
         branches = first_state["branch"]
         for i in range(len(branches["line_id"])):
+            lid = int(branches["line_id"][i])
+            flow = float(branches["p_from_mw"][i]) if "p_from_mw" in branches else 0.0
             branch_info.append({
-                "line_id": int(branches["line_id"][i]),
+                "line_id": lid,
+                "branch_id": lid,
                 "from_bus": int(branches["from_bus"][i]),
                 "to_bus": int(branches["to_bus"][i]),
-                "loading_percent": float(branches["loading_percent"][i]),
-                "in_service": bool(branches["in_service"][i]),
-                "p_flow_mw": float(branches["p_from_mw"][i])
+                "loading_percent": float(branches["loading_percent"][i]) if "loading_percent" in branches else 0.0,
+                "in_service": bool(branches["in_service"][i]) if "in_service" in branches else True,
+                "p_flow_mw": flow,
+                "p_from_mw": flow
             })
 
+    cascade_val = int(row.get("cascade", 0))
     return {
         "scenario_id": int(row["scenario_id"]),
         "contingency_id": str(row["contingency_id"]),
         "contingency_type": str(row["contingency_type"]),
         "pre_contingency_load_mw": float(row["pre_contingency_load_mw"]),
-        "cascade_occurred": bool(row["cascade"] == 1),
-        "additional_trips": int(row["additional_trips"]),
-        "load_shed_fraction": float(row["load_shed_fraction"]),
-        "load_shed_mw": float(row["load_shed_mw"]),
+        "load_scale": round(float(row["pre_contingency_load_mw"]) / 177.87, 2),
+        "cascade_occurred": bool(cascade_val == 1),
+        "cascade_label": cascade_val,
+        "additional_trips": int(row.get("additional_trips", 0)),
+        "load_shed_fraction": float(row.get("load_shed_fraction", 0.0)),
+        "load_shed_mw": float(row.get("load_shed_mw", 0.0)),
         "cascade_iterations": int(row.get("cascade_iterations", 1)),
         "termination_reason": str(row.get("termination_reason", "normal")),
         "num_buses": len(bus_info),
+        "bus_count": len(bus_info),
         "num_branches": len(branch_info),
+        "branch_count": len(branch_info),
         "bus_snapshot": bus_info[:30],  # sample preview
         "branch_snapshot": branch_info[:41],
         "zero_leakage_note": "Features shown above are strictly captured at t=0+ prior to subsequent cascade iterations."
@@ -523,6 +547,9 @@ def compare_grid_with_training_distribution(grid_meta: Dict[str, Any]) -> Dict[s
     if len(notes) == 0:
         notes.append("Grid topological size and loading profile match the training distribution envelope.")
 
+    ratio = round(branches / max(1, buses), 2)
+    closest_grid = "case118" if abs(buses - 118) < abs(buses - 30) else "case30"
+
     return {
         "grid_id": grid_meta.get("grid_id") or grid_meta.get("id"),
         "name": grid_meta.get("name"),
@@ -531,12 +558,20 @@ def compare_grid_with_training_distribution(grid_meta: Dict[str, Any]) -> Dict[s
         "total_load_mw": total_load,
         "distribution_status": status,
         "comparison": {
-            "training_bus_envelope": {"min": 30, "max": 118, "actual": buses},
+            "bus_count": buses,
+            "branch_count": branches,
+            "branch_to_bus_ratio": ratio,
+            "training_bus_envelope": [30, 118],
+            "training_branch_envelope": [41, 186],
+            "training_ratio_envelope": [1.37, 1.58],
+            "training_degree_envelope": [2.5, 3.2],
             "training_load_envelope": {
                 "mean_mw": training_load.get("mean", 283.4),
                 "actual_mw": total_load
             }
         },
+        "closest_training_grid": closest_grid,
+        "notes": "; ".join(notes),
         "operator_guidance": notes
     }
 

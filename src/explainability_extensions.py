@@ -92,7 +92,7 @@ def compute_counterfactual_actions(
     load_scale: float,
     current_risk: float,
     predict_fn: Any,
-    alert_threshold: float = 0.50
+    alert_threshold: float = 0.35
 ) -> Dict[str, Any]:
     """
     Search for the minimal operational intervention that lowers predicted risk below alert_threshold.
@@ -102,7 +102,6 @@ def compute_counterfactual_actions(
     2. 10% load reduction
     3. 15% load reduction
     4. 20% load reduction
-    5. Dynamic line up-rating (DLR +25% on critical corridors)
     """
     candidates = [
         {
@@ -134,18 +133,77 @@ def compute_counterfactual_actions(
     target_threshold = alert_threshold if current_risk >= alert_threshold else max(0.15, current_risk * 0.6)
     minimal_counterfactual = None
 
+    ls_pct_before = int(round(load_scale * 100))
+    risk_pct_before = int(round(current_risk * 100))
+
+    if current_risk < alert_threshold:
+        return {
+            "action_type": "none",
+            "title": "System Secure",
+            "description": "Grid operating margins are sufficient to absorb this contingency.",
+            "plain_text": f"Grid operating margins are secure (estimated risk {risk_pct_before}% < {int(alert_threshold*100)}% threshold). No operational curtailment required.",
+            "label": "model estimate",
+            "parameter": f"load_scale={round(load_scale, 2)}",
+            "target_load_scale": round(load_scale, 2),
+            "before_numbers": {
+                "load_scale": round(load_scale, 2),
+                "load_pct": ls_pct_before,
+                "risk": round(current_risk, 4),
+                "risk_pct": risk_pct_before
+            },
+            "after_numbers": {
+                "load_scale": round(load_scale, 2),
+                "load_pct": ls_pct_before,
+                "risk": round(current_risk, 4),
+                "risk_pct": risk_pct_before
+            },
+            "action": {
+                "type": "load_scale",
+                "target_value": round(load_scale, 2),
+                "delta_pct": 0.0
+            },
+            "risk_before": round(current_risk, 4),
+            "risk_after": round(current_risk, 4),
+            "risk_reduction": 0.0,
+            "target_threshold": target_threshold,
+            "success": True
+        }
+
     for cand in candidates:
-        new_scale = round(load_scale * cand["load_scale_factor"], 3)
+        new_scale = round(load_scale * cand["load_scale_factor"], 2)
         res = predict_fn(grid_id, outaged_elements, new_scale)
-        new_risk = float(res.get("cascade_probability", 0.0))
+        new_risk = float(res.get("cascade_probability", res.get("probability", 0.0)))
         risk_reduction = round(current_risk - new_risk, 4)
+        new_ls_pct = int(round(new_scale * 100))
+        new_risk_pct = int(round(new_risk * 100))
 
         if new_risk < target_threshold:
+            plain_msg = f"Reduce system load from {ls_pct_before}% to {new_ls_pct}%. Estimated risk {risk_pct_before}% to {new_risk_pct}%."
             minimal_counterfactual = {
                 "action_type": cand["action_type"],
                 "title": cand["title"],
                 "description": cand["description"],
+                "plain_text": plain_msg,
+                "label": "model estimate",
                 "parameter": f"load_scale={new_scale}",
+                "target_load_scale": new_scale,
+                "before_numbers": {
+                    "load_scale": round(load_scale, 2),
+                    "load_pct": ls_pct_before,
+                    "risk": round(current_risk, 4),
+                    "risk_pct": risk_pct_before
+                },
+                "after_numbers": {
+                    "load_scale": new_scale,
+                    "load_pct": new_ls_pct,
+                    "risk": round(new_risk, 4),
+                    "risk_pct": new_risk_pct
+                },
+                "action": {
+                    "type": "load_scale",
+                    "target_value": new_scale,
+                    "delta_pct": round((new_scale - load_scale) * 100, 1)
+                },
                 "risk_before": round(current_risk, 4),
                 "risk_after": round(new_risk, 4),
                 "risk_reduction": risk_reduction,
@@ -155,22 +213,193 @@ def compute_counterfactual_actions(
             break
 
     if minimal_counterfactual is None:
-        # Default fallback to deepest evaluated reduction
-        res = predict_fn(grid_id, outaged_elements, round(load_scale * 0.75, 3))
-        new_risk = float(res.get("cascade_probability", 0.0))
+        deepest_scale = round(load_scale * 0.75, 2)
+        res = predict_fn(grid_id, outaged_elements, deepest_scale)
+        new_risk = float(res.get("cascade_probability", res.get("probability", 0.0)))
+        deepest_ls_pct = int(round(deepest_scale * 100))
+        deepest_risk_pct = int(round(new_risk * 100))
+        plain_msg = f"Reduce system load from {ls_pct_before}% to {deepest_ls_pct}%. Estimated risk {risk_pct_before}% to {deepest_risk_pct}%."
+
         minimal_counterfactual = {
             "action_type": "emergency_curtailment",
             "title": "25% Coordinated Curtailment & Re-dispatch",
             "description": "Aggressive 25% load reduction combined with generator redispatch.",
-            "parameter": f"load_scale={round(load_scale * 0.75, 3)}",
+            "plain_text": plain_msg,
+            "label": "model estimate",
+            "parameter": f"load_scale={deepest_scale}",
+            "target_load_scale": deepest_scale,
+            "before_numbers": {
+                "load_scale": round(load_scale, 2),
+                "load_pct": ls_pct_before,
+                "risk": round(current_risk, 4),
+                "risk_pct": risk_pct_before
+            },
+            "after_numbers": {
+                "load_scale": deepest_scale,
+                "load_pct": deepest_ls_pct,
+                "risk": round(new_risk, 4),
+                "risk_pct": deepest_risk_pct
+            },
+            "action": {
+                "type": "load_scale",
+                "target_value": deepest_scale,
+                "delta_pct": round((deepest_scale - load_scale) * 100, 1)
+            },
             "risk_before": round(current_risk, 4),
             "risk_after": round(new_risk, 4),
             "risk_reduction": round(current_risk - new_risk, 4),
             "target_threshold": target_threshold,
-            "success": bool(new_risk < target_threshold)
+            "success": bool(new_risk < target_threshold),
+            "next_best_options": [
+                {
+                    "title": "30% Emergency Curtailment",
+                    "plain_text": f"Shed 30% load to {int(round(load_scale * 0.70 * 100))}% load scale.",
+                    "action": {"type": "load_scale", "target_value": round(load_scale * 0.70, 2)}
+                },
+                {
+                    "title": "25% DLR Up-rating + 15% Curtailment",
+                    "plain_text": "Combine Dynamic Line Rating with 15% load curtailment.",
+                    "action": {"type": "load_scale", "target_value": round(load_scale * 0.85, 2), "modifications": {"line_rating_multiplier": 1.25}}
+                }
+            ]
         }
 
     return minimal_counterfactual
+
+
+def compute_suggested_fix(
+    grid_id: str,
+    outaged_elements: List[str],
+    load_scale: float,
+    current_risk: float,
+    predict_fn: Any,
+    actual_cascade: Optional[bool] = None,
+    modifications: Optional[Dict[str, Any]] = None,
+    alert_threshold: float = 0.35
+) -> Dict[str, Any]:
+    """
+    Generate actionable suggested fix with plain language, before/after comparison,
+    and automatic simulator search when model and simulator disagree.
+    """
+    from src.replay import simulate_cascade
+
+    # 1. Simulator Search: If actual_cascade is True (simulator showed cascade or model disagreed)
+    if actual_cascade is True:
+        search_candidates = [
+            {"factor": 0.95, "title": "5% Load Curtailment"},
+            {"factor": 0.90, "title": "10% Load Curtailment"},
+            {"factor": 0.85, "title": "15% Load Curtailment"},
+            {"factor": 0.80, "title": "20% Emergency Load Curtailment"},
+            {"factor": 0.75, "title": "25% Emergency Load Curtailment"}
+        ]
+        ls_pct_before = int(round(load_scale * 100))
+
+        for cand in search_candidates:
+            cand_scale = round(load_scale * cand["factor"], 2)
+            try:
+                sim_res = simulate_cascade(
+                    grid_case=grid_id,
+                    outaged_elements=outaged_elements,
+                    load_scale=cand_scale,
+                    modifications=modifications
+                )
+                if not sim_res["actual_cascade"]:
+                    ls_pct_after = int(round(cand_scale * 100))
+                    trips = sim_res["additional_trips"]
+                    shed_pct = round(sim_res["final_load_shed_fraction"] * 100, 1)
+                    return {
+                        "action_type": "load_curtailment",
+                        "title": cand["title"],
+                        "label": "simulator verified",
+                        "plain_text": f"Reduce system load from {ls_pct_before}% to {ls_pct_after}%. Simulator verified: cascade contained ({trips} extra trips, {shed_pct}% load shed).",
+                        "parameter": f"load_scale={cand_scale}",
+                        "target_load_scale": cand_scale,
+                        "before_numbers": {
+                            "load_scale": round(load_scale, 2),
+                            "load_pct": ls_pct_before,
+                            "cascade": True,
+                            "status": "cascade"
+                        },
+                        "after_numbers": {
+                            "load_scale": cand_scale,
+                            "load_pct": ls_pct_after,
+                            "cascade": False,
+                            "status": "contained",
+                            "extra_trips": trips,
+                            "load_shed_pct": shed_pct
+                        },
+                        "action": {
+                            "type": "load_scale",
+                            "target_value": cand_scale,
+                            "delta_pct": round((cand_scale - load_scale) * 100, 1)
+                        },
+                        "search_source": "simulator_search",
+                        "disagreement_resolved": True,
+                        "success": True
+                    }
+            except Exception:
+                continue
+
+        # If load reductions didn't contain it, test dynamic line rating
+        try:
+            dlr_mods = dict(modifications or {})
+            dlr_mods["line_rating_multiplier"] = 1.25
+            sim_res = simulate_cascade(
+                grid_case=grid_id,
+                outaged_elements=outaged_elements,
+                load_scale=load_scale,
+                modifications=dlr_mods
+            )
+            if not sim_res["actual_cascade"]:
+                trips = sim_res["additional_trips"]
+                shed_pct = round(sim_res["final_load_shed_fraction"] * 100, 1)
+                return {
+                    "action_type": "dynamic_line_rating",
+                    "title": "+25% Dynamic Line Rating (DLR)",
+                    "label": "simulator verified",
+                    "plain_text": f"Apply +25% Dynamic Line Rating on critical corridors. Simulator verified: cascade contained ({trips} extra trips, {shed_pct}% load shed).",
+                    "parameter": "line_rating_multiplier=1.25",
+                    "before_numbers": {"load_scale": round(load_scale, 2), "status": "cascade"},
+                    "after_numbers": {"load_scale": round(load_scale, 2), "status": "contained", "extra_trips": trips, "load_shed_pct": shed_pct},
+                    "action": {"type": "modifications", "modifications": dlr_mods},
+                    "search_source": "simulator_search",
+                    "disagreement_resolved": True,
+                    "success": True
+                }
+        except Exception:
+            pass
+
+        # If no single action works
+        return {
+            "action_type": "none",
+            "title": "Severe Cascade Stress",
+            "label": "simulator verified",
+            "plain_text": "No single action contained the cascade under severe stress.",
+            "search_source": "simulator_search",
+            "success": False,
+            "next_best_options": [
+                {
+                    "title": "Emergency 25% Load Curtailment",
+                    "plain_text": f"Curtail load to {int(round(load_scale * 0.75 * 100))}% to minimize wide-area blackout propagation.",
+                    "action": {"type": "load_scale", "target_value": round(load_scale * 0.75, 2)}
+                },
+                {
+                    "title": "Emergency 30% Load Curtailment",
+                    "plain_text": f"Curtail load to {int(round(load_scale * 0.70 * 100))}% load scale.",
+                    "action": {"type": "load_scale", "target_value": round(load_scale * 0.70, 2)}
+                }
+            ]
+        }
+
+    # 2. Otherwise use Model Estimate
+    return compute_counterfactual_actions(
+        grid_id=grid_id,
+        outaged_elements=outaged_elements,
+        load_scale=load_scale,
+        current_risk=current_risk,
+        predict_fn=predict_fn,
+        alert_threshold=alert_threshold
+    )
 
 
 def compute_explanation_quality_and_agreement(
