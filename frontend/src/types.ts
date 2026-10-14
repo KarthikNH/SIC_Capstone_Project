@@ -667,3 +667,125 @@ export interface ChatMessage {
   timestamp: number;
   isStreaming?: boolean;
 }
+
+// -----------------------------------------------------------------------------
+// Maintenance Prioritisation & Outage Planning Types
+// -----------------------------------------------------------------------------
+export interface AssetRecord {
+  asset_id: string;
+  name: string;
+  asset_type: string;
+  age_years: number;
+  condition_score: number;
+  last_inspection_date: string;
+}
+
+export interface MaintenancePriorityItem {
+  asset_id: string;
+  name: string;
+  asset_type: string;
+  age_years: number;
+  condition_score: number;
+  last_inspection_date: string;
+  peak_loading_pct: number;
+  avg_loading_pct: number;
+  hours_above_80: number;
+  hours_above_100: number;
+  stress_score: number;
+  likelihood: number;
+  consequence: number;
+  priority_score: number;
+  urgency: 'Critical' | 'High' | 'Medium' | 'Low';
+  color: string;
+  reason: string;
+  rank: number;
+}
+
+export interface MaintenancePriorityResponse {
+  grid_id: string;
+  is_simulated_data: boolean;
+  data_source_label: string;
+  load_profile: number[];
+  total_assets: number;
+  elapsed_ms: number;
+  formula: {
+    likelihood: string;
+    priority: string;
+    note: string;
+  };
+  summary: string;
+  priorities: MaintenancePriorityItem[];
+}
+
+export interface PlannedOutageResponse {
+  grid_id: string;
+  asset_id: string;
+  hourly_risks: Array<{
+    hour: number;
+    time_label: string;
+    load_multiplier: number;
+    cascade_risk: number;
+    alert_level: string;
+  }>;
+  safest_window: {
+    start_hour: number;
+    end_hour: number;
+    label: string;
+    average_risk: number;
+  };
+  avoid_window: {
+    start_hour: number;
+    end_hour: number;
+    label: string;
+    peak_risk: number;
+  };
+  verdict: string;
+  verification: {
+    status: string;
+    simulator_tested_at_hour: string;
+    simulator_load_scale: number;
+    actual_cascade: boolean;
+    additional_trips: number;
+    load_shed_percent: number;
+    label: string;
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Notifications & Outbox Types
+// -----------------------------------------------------------------------------
+export interface NotificationRule {
+  id: string;
+  name: string;
+  rule_type: 'risk_threshold' | 'system_load' | 'saved_scenario' | 'top_priority_asset';
+  threshold: number;
+  grid_id: string;
+  recipients: string[];
+  cooldown_hours: number;
+  enabled: boolean;
+  last_triggered_at?: string | null;
+  description?: string;
+}
+
+export interface NotificationSettings {
+  smtp_configured: boolean;
+  outbox_mode: boolean;
+  confirmed_recipients: string[];
+  digest_enabled: boolean;
+  digest_frequency: string;
+  digest_time: string;
+  rate_limit_per_hour: number;
+}
+
+export interface OutboxEmail {
+  id: string;
+  email_type: 'alert' | 'digest' | 'report' | 'test';
+  subject: string;
+  recipients: string[];
+  from_address?: string;
+  created_at: string;
+  status: string;
+  reason?: string;
+  html_content?: string;
+  text_content?: string;
+}

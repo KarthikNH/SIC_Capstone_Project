@@ -15,6 +15,8 @@ Features:
   * suggest_mitigation
   * get_dataset_card
   * get_feature_info
+  * send_report_email (confirmation required)
+  * create_alert_rule
   * UI actions: select_outage, clear_outage, set_load, show_criticality, switch_tab
 - Defense against prompt injection: Treats all grid metadata, comments, and file text as untrusted.
 - Decision support framing: Never claims certainty, highlights OOD status.
@@ -42,6 +44,7 @@ from src.grid_manager import compute_grid_statistics, load_grid_by_id
 from src.inference import compute_whatif_curve, predict
 from src.mitigation import evaluate_mitigation_actions
 from src.topology import compute_grid_topology
+from src.notifications import send_report_notification, add_or_update_rule, get_smtp_config
 
 # Configure logging
 logger = logging.getLogger("gridwatch.chat")
@@ -224,6 +227,42 @@ def tool_get_feature_info(feature_name: str) -> Dict[str, Any]:
         "error": f"Feature '{feature_name}' not found.",
         "available_features": [f["name"] for f in FEATURE_DICTIONARY]
     }
+
+
+def tool_send_report_email(grid_id: str, recipient: str, confirmed: bool = False) -> Dict[str, Any]:
+    t0 = time.time()
+    logger.info(f"[TOOL CALL] send_report_email grid={grid_id} to={recipient} confirmed={confirmed}")
+    if not confirmed:
+        return {
+            "status": "confirmation_required",
+            "grid_id": grid_id,
+            "recipient": recipient,
+            "message": f"Confirmation required before dispatching report email to {recipient}."
+        }
+
+    res = send_report_notification(grid_id, recipient)
+    duration_ms = round((time.time() - t0) * 1000, 2)
+    logger.info(f"[TOOL CALL COMPLETED] send_report_email ({duration_ms}ms): {res.get('status')}")
+    return res
+
+
+def tool_create_alert_rule(name: str, rule_type: str, threshold: float, recipient: str, grid_id: str = "case30") -> Dict[str, Any]:
+    t0 = time.time()
+    rule_data = {
+        "name": name,
+        "rule_type": rule_type,
+        "threshold": threshold,
+        "recipients": [recipient],
+        "grid_id": grid_id,
+        "cooldown_hours": 6.0,
+        "enabled": True
+    }
+    rule_obj, errors = add_or_update_rule(rule_data)
+    duration_ms = round((time.time() - t0) * 1000, 2)
+    logger.info(f"[TOOL CALL] create_alert_rule name='{name}' errors={errors} ({duration_ms}ms)")
+    if errors:
+        return {"status": "error", "errors": errors}
+    return {"status": "success", "rule": rule_obj}
 
 
 # ==============================================================================
@@ -431,17 +470,78 @@ async def generate_offline_chat_stream(
             await asyncio.sleep(0.015)
         yield json.dumps({"type": "action", "action": "switch_tab", "value": "why", "description": "Switched to Why tab"}) + "\n"
 
-    elif any(w in sanitized_prompt for w in ["outage line", "trip line", "select line", "take out line"]):
-        # Extract line number if present
-        import re
-        match = re.search(r"line\s*(\d+)", sanitized_prompt)
-        line_num = match.group(1) if match else "3"
-        el_id = f"line_{line_num}"
-        reply = f"Simulating contingency by taking out Line {line_num} in the transmission scene."
+    elif any(w in sanitized_prompt for w in ["maintenance tab", "asset priority", "view maintenance", "priorities"]):
+        reply = "Navigating to the Maintenance Prioritisation tab."
         for chunk in reply.split(" "):
             yield json.dumps({"type": "token", "content": chunk + " "}) + "\n"
             await asyncio.sleep(0.015)
-        yield json.dumps({"type": "action", "action": "select_outage", "value": el_id, "description": f"Selected Line {line_num} in scene"}) + "\n"
+        yield json.dumps({"type": "action", "action": "switch_tab", "value": "maintenance", "description": "Switched to Maintenance tab"}) + "\n"
+
+    elif any(w in sanitized_prompt for w in ["email report", "send report", "email me", "send email"]):
+        # Extract recipient or default to operator
+        import re
+        email_match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", sanitized_prompt)
+        recipient = email_match.group(0) if email_match else "operator@gridwatch.local"
+
+        is_confirmed = any(w in sanitized_prompt for w in ["confirm", "yes", "proceed", "send now", "please"])
+        yield json.dumps({"type": "tool_call", "name": "send_report_email", "args": {"grid_id": grid_id, "recipient": recipient, "confirmed": is_confirmed}}) + "\n"
+        await asyncio.sleep(0.05)
+        res = tool_send_report_email(grid_id, recipient, confirmed=is_confirmed)
+        yield json.dumps({"type": "tool_result", "name": "send_report_email", "data": res}) + "\n"
+
+        if res.get("status") == "confirmation_required":
+            reply = (
+                f"**Confirmation Required**:\n\n"
+                f"Would you like me to dispatch the operational stability report for **{grid_id.upper()}** to `{recipient}`?\n\n"
+                "Please reply **'Confirm'** or **'Yes, send report'** to authorize dispatch."
+            )
+        elif res.get("status") == "outbox_saved":
+            reply = (
+                f"**Report Successfully Generated & Saved to Outbox**:\n\n"
+                f"- **Recipient**: `{recipient}`\n"
+                f"- **Status**: `Saved to Outbox` (Message ID: `{res.get('email_id')}`)\n"
+                f"- **Mode**: Demo Outbox Mode (SMTP is not configured in live production).\n\n"
+                f"You can review and preview this rendered Estate HTML report in the **Notifications Outbox** drawer."
+            )
+        else:
+            reply = (
+                f"**Report Successfully Dispatched**:\n\n"
+                f"- **Recipient**: `{recipient}`\n"
+                f"- **Mode**: Live SMTP Dispatch\n"
+                f"- **Message ID**: `{res.get('email_id')}`"
+            )
+
+        for chunk in reply.split(" "):
+            yield json.dumps({"type": "token", "content": chunk + " "}) + "\n"
+            await asyncio.sleep(0.015)
+
+    elif any(w in sanitized_prompt for w in ["create rule", "alert rule", "watch rule", "notify me"]):
+        import re
+        email_match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", sanitized_prompt)
+        recipient = email_match.group(0) if email_match else "operator@gridwatch.local"
+        rule_name = f"High Risk Watchlist on {grid_id.upper()}"
+
+        yield json.dumps({"type": "tool_call", "name": "create_alert_rule", "args": {"name": rule_name, "rule_type": "risk_threshold", "threshold": 0.50, "recipient": recipient, "grid_id": grid_id}}) + "\n"
+        await asyncio.sleep(0.05)
+        res = tool_create_alert_rule(rule_name, "risk_threshold", 0.50, recipient, grid_id)
+        yield json.dumps({"type": "tool_result", "name": "create_alert_rule", "data": res}) + "\n"
+
+        if res.get("status") == "success":
+            r_id = res["rule"]["id"]
+            reply = (
+                f"**Notification Rule Created**:\n\n"
+                f"- **Rule ID**: `{r_id}`\n"
+                f"- **Trigger**: Cascade Risk &ge; 50% on `{grid_id.upper()}`\n"
+                f"- **Recipient**: `{recipient}`\n"
+                f"- **Cooldown**: 6 hours\n\n"
+                "The rule is now active and will monitor contingencies during automated background evaluations."
+            )
+        else:
+            reply = f"Could not create rule: {res.get('errors')}"
+
+        for chunk in reply.split(" "):
+            yield json.dumps({"type": "token", "content": chunk + " "}) + "\n"
+            await asyncio.sleep(0.015)
 
     else:
         # General overview

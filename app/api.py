@@ -74,6 +74,29 @@ from src.layout import compute_or_load_3d_layout, compute_or_load_2d_layout
 from src.ood_detector import evaluate_ood, get_grid_ood_status, get_training_ood_stats
 from src.replay import simulate_cascade
 from src.utils.config import load_config
+from src.maintenance import (
+    DEFAULT_24H_LOAD_PROFILE,
+    get_grid_assets,
+    generate_simulated_asset_table,
+    get_asset_template_csv,
+    save_uploaded_asset_data,
+    compute_maintenance_priorities,
+    evaluate_planned_outage,
+)
+from src.notifications import (
+    get_notification_settings,
+    update_notification_settings,
+    list_rules,
+    create_rule,
+    delete_rule,
+    evaluate_rules,
+    send_test_email,
+    send_digest_email,
+    list_outbox_emails,
+    get_outbox_email,
+    get_notification_history,
+)
+import asyncio
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -181,9 +204,61 @@ class ChatRequest(BaseModel):
     context: Optional[ChatContext] = Field(default_factory=ChatContext, description="Active grid context")
 
 
+class MaintenancePriorityRequest(BaseModel):
+    grid_id: Optional[str] = Field(default="case30", description="Power grid identifier (case30, case118, uploaded)")
+    case: Optional[str] = Field(default=None, description="Alias for grid_id")
+    load_profile: Optional[List[float]] = Field(default=None, description="24-hour load multiplier array (e.g. 0.60 to 1.20)")
+
+
+class PlannedOutageRequest(BaseModel):
+    grid_id: Optional[str] = Field(default="case30", description="Power grid identifier")
+    case: Optional[str] = Field(default=None, description="Alias for grid_id")
+    asset_id: str = Field(..., description="Target asset identifier e.g. 'line_0' or 'branch_0'")
+    load_profile: Optional[List[float]] = Field(default=None, description="24-hour load multiplier array")
+
+
+class NotificationSettingsRequest(BaseModel):
+    confirmed_recipients: Optional[List[str]] = Field(default=None, description="List of confirmed recipient emails")
+    digest_frequency: Optional[str] = Field(default=None, description="'daily' or 'weekly'")
+    digest_recipients: Optional[List[str]] = Field(default=None, description="Recipients for scheduled digest")
+
+
+class NotificationRuleRequest(BaseModel):
+    name: str = Field(..., description="Human-readable rule name")
+    rule_type: str = Field(..., description="'risk_threshold', 'system_load', 'saved_scenario', or 'maintenance_top3'")
+    recipients: List[str] = Field(..., description="List of recipient email addresses")
+    grid_id: Optional[str] = Field(default="case30", description="Associated grid ID")
+    threshold: Optional[float] = Field(default=0.5, description="Trigger risk threshold (0.0 to 1.0)")
+    load_scale: Optional[float] = Field(default=1.0, description="Trigger system load multiplier")
+    scenario_outages: Optional[List[str]] = Field(default=None, description="Specific outaged elements for saved scenario rule")
+    cooldown_hours: Optional[float] = Field(default=6.0, description="Minimum hours between alerts for this rule")
+    enabled: Optional[bool] = Field(default=True, description="Whether rule is active")
+
+
+class TestEmailRequest(BaseModel):
+    recipient: str = Field(..., description="Target email address for test message")
+
+
+class DigestEmailRequest(BaseModel):
+    recipients: Optional[List[str]] = Field(default=None, description="Optional target recipients; defaults to configured digest recipients")
+    grid_id: Optional[str] = Field(default="case30", description="Grid ID to summarize")
+
+
 # ==============================================================================
-# Lifespan Context Manager for Model Pre-Warming
+# Lifespan Context Manager for Model Pre-Warming & Background Services
 # ==============================================================================
+
+async def _notification_scheduler_loop():
+    """Background worker to periodically evaluate notification rules."""
+    while True:
+        try:
+            await asyncio.sleep(60)  # Check rules once every minute
+            evaluate_rules()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[SchedulerWorker] Rule evaluation error: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -207,7 +282,17 @@ async def lifespan(app: FastAPI):
     else:
         print(f"[DatasetCard] Found valid dataset card at {dataset_card_path}")
 
-    yield
+    # Start background notification scheduler
+    scheduler_task = asyncio.create_task(_notification_scheduler_loop())
+
+    try:
+        yield
+    finally:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(
@@ -1082,6 +1167,213 @@ async def legacy_get_layout(case: str = Query("case30")):
 @app.get("/layout2d", tags=["Topology"])
 async def legacy_get_layout2d(case: str = Query("case30")):
     return compute_or_load_2d_layout(case)
+
+
+# ==============================================================================
+# Maintenance Prioritisation & Outage Planning
+# ==============================================================================
+
+@app.post("/maintenance/priority", tags=["Maintenance"])
+async def get_maintenance_priorities(req: MaintenancePriorityRequest):
+    """
+    Compute risk-based maintenance priorities for all grid transmission assets.
+    Computes:
+    - Consequence (cascade probability if asset is lost, reusing cached N-1 criticality map)
+    - Stress (24h thermal loading profile: peak load, hours >80%, hours >100%)
+    - Likelihood (transparent formula: 0.45*(1-cond) + 0.30*age/40 + 0.25*stress)
+    - Priority = Likelihood x Consequence
+    """
+    grid_id = req.grid_id or req.case or "case30"
+    try:
+        results = compute_maintenance_priorities(grid_id, req.load_profile)
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compute maintenance priorities: {str(e)}")
+
+
+@app.post("/maintenance/planned-outage", tags=["Maintenance"])
+async def plan_outage(req: PlannedOutageRequest):
+    """
+    Evaluate 24-hour planned maintenance outage window for an asset.
+    Simulates taking the asset offline across the daily load cycle, predicts hourly risk,
+    identifies safest and avoid windows, and performs cascade simulator verification.
+    """
+    grid_id = req.grid_id or req.case or "case30"
+    try:
+        evaluation = evaluate_planned_outage(grid_id, req.asset_id, req.load_profile)
+        return evaluation
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to evaluate planned outage: {str(e)}")
+
+
+@app.get("/maintenance/assets/template", tags=["Maintenance"])
+async def download_asset_template():
+    """Download standard CSV template for custom asset health and age data."""
+    csv_data = get_asset_template_csv()
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=asset_data_template.csv"}
+    )
+
+
+@app.post("/maintenance/assets/upload", tags=["Maintenance"])
+async def upload_asset_table(
+    file: UploadFile = File(...),
+    grid_id: str = Query("case30", description="Target grid identifier")
+):
+    """
+    Upload custom asset condition, age, and inspection records CSV for a grid.
+    Required columns: asset_id, age_years, condition_score, last_inspection_date
+    """
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files (.csv) are accepted for asset data.")
+    
+    content_bytes = await file.read()
+    if len(content_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=400, detail="Asset CSV exceeds 5 MB limit.")
+
+    try:
+        csv_str = content_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            csv_str = content_bytes.decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Failed to decode CSV text.")
+
+    try:
+        assets = save_uploaded_asset_data(grid_id, csv_str)
+        return {
+            "status": "success",
+            "grid_id": grid_id,
+            "source": "uploaded",
+            "count": len(assets),
+            "message": f"Successfully uploaded and registered {len(assets)} asset records for {grid_id}."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid asset CSV format: {str(e)}")
+
+
+@app.get("/maintenance/assets/{grid_id}", tags=["Maintenance"])
+async def get_grid_asset_records(grid_id: str):
+    """Retrieve all asset health records for a grid (indicates simulated vs uploaded)."""
+    assets, source = get_grid_assets(grid_id)
+    return {
+        "grid_id": grid_id,
+        "source": source,
+        "is_simulated": (source == "simulated"),
+        "label": "Simulated asset data" if source == "simulated" else "Uploaded asset data",
+        "count": len(assets),
+        "assets": assets
+    }
+
+
+# ==============================================================================
+# Notifications & Alerting Rules
+# ==============================================================================
+
+@app.get("/notifications/settings", tags=["Notifications"])
+async def get_settings():
+    """Get current notification settings, confirmed recipients, and SMTP status."""
+    return get_notification_settings()
+
+
+@app.post("/notifications/settings", tags=["Notifications"])
+async def update_settings(req: NotificationSettingsRequest):
+    """Update notification settings and confirmed recipients."""
+    updated = update_notification_settings(
+        confirmed_recipients=req.confirmed_recipients,
+        digest_frequency=req.digest_frequency,
+        digest_recipients=req.digest_recipients
+    )
+    return updated
+
+
+@app.get("/notifications/rules", tags=["Notifications"])
+async def get_all_rules():
+    """List all watchlist and alerting rules."""
+    return {"rules": list_rules()}
+
+
+@app.post("/notifications/rules", tags=["Notifications"])
+async def create_new_rule(req: NotificationRuleRequest):
+    """Create a new watchlist alerting rule."""
+    try:
+        rule = create_rule(
+            name=req.name,
+            rule_type=req.rule_type,
+            recipients=req.recipients,
+            grid_id=req.grid_id or "case30",
+            threshold=req.threshold if req.threshold is not None else 0.5,
+            load_scale=req.load_scale if req.load_scale is not None else 1.0,
+            scenario_outages=req.scenario_outages,
+            cooldown_hours=req.cooldown_hours if req.cooldown_hours is not None else 6.0,
+            enabled=req.enabled if req.enabled is not None else True
+        )
+        return rule
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/notifications/rules/{rule_id}", tags=["Notifications"])
+async def remove_rule(rule_id: str):
+    """Delete an existing notification rule."""
+    success = delete_rule(rule_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found.")
+    return {"status": "deleted", "rule_id": rule_id}
+
+
+@app.post("/notifications/run-check-now", tags=["Notifications"])
+async def run_check_now():
+    """Trigger an immediate evaluation of all active notification rules."""
+    eval_results = evaluate_rules(force=True)
+    return {
+        "status": "completed",
+        "timestamp": time.time(),
+        "evaluations": eval_results
+    }
+
+
+@app.post("/notifications/test", tags=["Notifications"])
+async def send_test(req: TestEmailRequest):
+    """Send an immediate test email (or write to outbox in demo mode)."""
+    try:
+        result = send_test_email(req.recipient)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send test email: {str(e)}")
+
+
+@app.post("/notifications/digest", tags=["Notifications"])
+async def send_digest(req: DigestEmailRequest):
+    """Send a grid status summary digest email."""
+    try:
+        result = send_digest_email(recipients=req.recipients, grid_id=req.grid_id or "case30")
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send digest email: {str(e)}")
+
+
+@app.get("/notifications/outbox", tags=["Notifications"])
+async def get_outbox():
+    """List all saved emails in Outbox Demo Mode."""
+    return {"emails": list_outbox_emails()}
+
+
+@app.get("/notifications/outbox/{email_id}", tags=["Notifications"])
+async def get_single_outbox_email(email_id: str):
+    """Fetch a rendered email by ID from Outbox."""
+    email_data = get_outbox_email(email_id)
+    if not email_data:
+        raise HTTPException(status_code=404, detail="Email not found in outbox.")
+    return email_data
+
+
+@app.get("/notifications/history", tags=["Notifications"])
+async def get_history():
+    """Retrieve history log of rule evaluations and notification dispatches."""
+    return {"history": get_notification_history()}
 
 
 if __name__ == "__main__":

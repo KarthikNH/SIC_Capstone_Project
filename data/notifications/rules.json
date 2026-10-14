@@ -1,0 +1,128 @@
+[
+  {
+    "id": "rule_n1_high_risk",
+    "name": "Alert on High N-1 Cascade Risk (\u226550%)",
+    "rule_type": "risk_threshold",
+    "threshold": 0.5,
+    "grid_id": "case30",
+    "recipients": [
+      "operator@gridwatch.local"
+    ],
+    "cooldown_hours": 6.0,
+    "enabled": true,
+    "last_triggered_at": "2026-10-14T11:08:49Z",
+    "description": "Fires if any N-1 contingency generates cascade failure risk exceeding 50%."
+  },
+  {
+    "id": "rule_load_exceeded",
+    "name": "System Load Warning (\u2265110%)",
+    "rule_type": "system_load",
+    "threshold": 1.1,
+    "grid_id": "case30",
+    "recipients": [
+      "operator@gridwatch.local"
+    ],
+    "cooldown_hours": 6.0,
+    "enabled": true,
+    "last_triggered_at": null,
+    "description": "Fires if aggregate system loading reaches or exceeds 110% of nominal capacity."
+  },
+  {
+    "id": "rule_maintenance_top3",
+    "name": "New Top-3 Maintenance Priority Asset",
+    "rule_type": "top_priority_asset",
+    "threshold": 0.4,
+    "grid_id": "case30",
+    "recipients": [
+      "operator@gridwatch.local"
+    ],
+    "cooldown_hours": 12.0,
+    "enabled": true,
+    "last_triggered_at": null,
+    "description": "Fires when an asset crosses into Critical maintenance priority (score \u22650.40)."
+  },
+  {
+    "id": "test_cooldown_1791974562",
+    "name": "Audit Test High Risk Rule",
+    "rule_type": "risk_threshold",
+    "threshold": 0.01,
+    "grid_id": "case30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "cooldown_hours": 6.0,
+    "enabled": true,
+    "last_triggered_at": "2026-10-14T11:12:50Z",
+    "description": ""
+  },
+  {
+    "id": "test_cooldown_1791974796",
+    "name": "Audit Test High Risk Rule",
+    "rule_type": "risk_threshold",
+    "threshold": 0.01,
+    "grid_id": "case30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "cooldown_hours": 6.0,
+    "enabled": true,
+    "last_triggered_at": "2026-10-14T10:46:36Z",
+    "description": ""
+  },
+  {
+    "id": "test_cooldown_1791975030",
+    "name": "Audit Test High Risk Rule",
+    "rule_type": "risk_threshold",
+    "threshold": 0.01,
+    "grid_id": "case30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "cooldown_hours": 6.0,
+    "enabled": true,
+    "last_triggered_at": "2026-10-14T10:50:30Z",
+    "description": ""
+  },
+  {
+    "id": "test_cooldown_1791975414",
+    "name": "Audit Test High Risk Rule",
+    "rule_type": "risk_threshold",
+    "threshold": 0.01,
+    "grid_id": "case30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "cooldown_hours": 6.0,
+    "enabled": true,
+    "last_triggered_at": "2026-10-14T10:56:54Z",
+    "description": ""
+  },
+  {
+    "id": "test_cooldown_1791975469",
+    "name": "Audit Test High Risk Rule",
+    "rule_type": "risk_threshold",
+    "threshold": 0.01,
+    "grid_id": "case30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "cooldown_hours": 6.0,
+    "enabled": true,
+    "last_triggered_at": "2026-10-14T10:57:49Z",
+    "description": ""
+  },
+  {
+    "id": "test_cooldown_1791975565",
+    "name": "Audit Test High Risk Rule",
+    "rule_type": "risk_threshold",
+    "threshold": 0.01,
+    "grid_id": "case30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "cooldown_hours": 6.0,
+    "enabled": true,
+    "last_triggered_at": "2026-10-14T10:59:25Z",
+    "description": ""
+  }
+]

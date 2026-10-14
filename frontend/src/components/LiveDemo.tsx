@@ -7,6 +7,8 @@ import { ChatDrawer } from './ChatDrawer';
 import { ErrorBoundary } from './ErrorBoundary';
 import { CascadeReplayPanel } from './CascadeReplayPanel';
 import { SuggestedFixCard } from './SuggestedFixCard';
+import { MaintenanceTab } from './MaintenanceTab';
+import { NotificationsDrawer } from './NotificationsDrawer';
 import { formatBranchName, CANONICAL_ALERT_THRESHOLD, formatPercent, formatProbability, assertNotNaN } from '../utils/probability';
 import { useGridStore } from '../store';
 import {
@@ -30,7 +32,9 @@ import {
   AlertCircle,
   Maximize2,
   Minimize2,
-  Bot
+  Bot,
+  Wrench,
+  Bell
 } from 'lucide-react';
 
 export const LiveDemo: React.FC = () => {
@@ -87,6 +91,8 @@ export const LiveDemo: React.FC = () => {
     setGroupByVoltage,
     topologyOverlay,
     setTopologyOverlay,
+    toggleNotifications,
+    showMaintenanceOverlay
   } = useGridStore();
 
   const uniqueVoltages = useMemo(
@@ -489,6 +495,16 @@ export const LiveDemo: React.FC = () => {
             <span>Reset Camera</span>
           </button>
 
+          {/* Notifications / Alerts button */}
+          <button
+            onClick={toggleNotifications}
+            className="text-xs text-[#555] hover:text-ink flex items-center gap-1.5 py-1 px-2.5 border border-[#cfd3d8] bg-white transition-colors shadow-2xs hover:border-charcoal"
+            title="Open Notifications & Alert Watchlist"
+          >
+            <Bell className="w-3.5 h-3.5 text-amber" />
+            <span>Alerts &amp; Outbox</span>
+          </button>
+
           <button
             onClick={toggleFullscreen}
             className="text-xs text-[#555] hover:text-ink flex items-center gap-1.5 py-1 px-2.5 border border-[#cfd3d8] bg-white transition-colors shadow-2xs hover:border-charcoal"
@@ -873,6 +889,31 @@ export const LiveDemo: React.FC = () => {
                       </div>
                     </div>
 
+                    {/* Maintenance Priority Overlay Legend */}
+                    {showMaintenanceOverlay && (
+                      <div className="p-2 bg-[#f8fafc] border border-[#cfd3d8] space-y-1">
+                        <p className="eyebrow text-charcoal">Maintenance Priority Overlay</p>
+                        <div className="space-y-1 text-[11px] font-mono">
+                          <div className="flex items-center gap-2">
+                            <span className="w-3 h-2 bg-[#dc2626]" />
+                            <span>Critical (Score &ge; 0.40)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="w-3 h-2 bg-[#ea580c]" />
+                            <span>High (Score 0.20 – 0.39)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="w-3 h-2 bg-[#d97706]" />
+                            <span>Medium (Score 0.08 – 0.19)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="w-3 h-2 bg-[#16a34a]" />
+                            <span>Low (Score &lt; 0.08)</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* State Tints */}
                     <div>
                       <p className="eyebrow mb-1.5">State Tints</p>
@@ -1110,6 +1151,20 @@ export const LiveDemo: React.FC = () => {
             <span className="flex items-center gap-2">
               <Database className="w-4 h-4 text-charcoal" />
               <span>Data (Dataset Inspector)</span>
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('maintenance')}
+            className={`pb-3 text-sm font-medium transition-all relative shrink-0 ${
+              activeTab === 'maintenance'
+                ? 'text-ink font-semibold border-b-2 border-charcoal'
+                : 'text-[#666] hover:text-ink'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <Wrench className="w-4 h-4 text-charcoal" />
+              <span>Maintenance</span>
             </span>
           </button>
         </div>
@@ -1798,7 +1853,19 @@ export const LiveDemo: React.FC = () => {
             <DatasetInspector />
           </ErrorBoundary>
         )}
+
+        {/* TAB 5: MAINTENANCE */}
+        {activeTab === 'maintenance' && (
+          <ErrorBoundary sectionName="Maintenance Prioritisation">
+            <MaintenanceTab />
+          </ErrorBoundary>
+        )}
       </div>
+
+      {/* Notifications Drawer */}
+      <ErrorBoundary sectionName="Notifications">
+        <NotificationsDrawer />
+      </ErrorBoundary>
 
       {/* Floating Grid Assistant Chat Drawer */}
       <ErrorBoundary sectionName="Grid Assistant Chatbot">

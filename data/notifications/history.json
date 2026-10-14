@@ -1,0 +1,192 @@
+[
+  {
+    "id": "msg_1791976370_b203fe",
+    "type": "alert",
+    "subject": "Gridwatch Alert: Audit Test High Risk Rule on CASE30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T11:12:50Z"
+  },
+  {
+    "id": "msg_1791976129_22193f",
+    "type": "alert",
+    "subject": "Gridwatch Alert: Alert on High N-1 Cascade Risk (\u226550%) on CASE30",
+    "recipients": [
+      "operator@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T11:08:49Z"
+  },
+  {
+    "id": "msg_1791975729_e65ff7",
+    "type": "digest",
+    "subject": "Gridwatch Periodic Digest // CASE30 Operational Summary",
+    "recipients": [
+      "operator@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T11:02:09Z"
+  },
+  {
+    "id": "msg_1791975727_48312d",
+    "type": "alert",
+    "subject": "[CRITICAL ALERT] N-1 Contingency Triggered on Line 1-2",
+    "recipients": [
+      "operator@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T11:02:07Z"
+  },
+  {
+    "id": "msg_1791975571_fa82e1",
+    "type": "alert",
+    "subject": "Gridwatch Alert: Audit Test High Risk Rule on CASE30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:59:31Z"
+  },
+  {
+    "id": "msg_1791975565_609a10",
+    "type": "alert",
+    "subject": "Test Outbox Verification Dispatch",
+    "recipients": [
+      "test_audit@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:59:25Z"
+  },
+  {
+    "id": "msg_1791975475_c73c41",
+    "type": "alert",
+    "subject": "Gridwatch Alert: Audit Test High Risk Rule on CASE30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:57:55Z"
+  },
+  {
+    "id": "msg_1791975469_32d0cb",
+    "type": "alert",
+    "subject": "Test Outbox Verification Dispatch",
+    "recipients": [
+      "test_audit@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:57:49Z"
+  },
+  {
+    "id": "msg_1791975418_bf5d4e",
+    "type": "alert",
+    "subject": "Gridwatch Alert: Audit Test High Risk Rule on CASE30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:56:58Z"
+  },
+  {
+    "id": "msg_1791975414_fc5607",
+    "type": "alert",
+    "subject": "Test Outbox Verification Dispatch",
+    "recipients": [
+      "test_audit@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:56:54Z"
+  },
+  {
+    "id": "msg_1791975033_690652",
+    "type": "alert",
+    "subject": "Gridwatch Alert: Audit Test High Risk Rule on CASE30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:50:33Z"
+  },
+  {
+    "id": "msg_1791975030_a1b2d6",
+    "type": "alert",
+    "subject": "Test Outbox Verification Dispatch",
+    "recipients": [
+      "test_audit@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:50:30Z"
+  },
+  {
+    "id": "msg_1791974800_193547",
+    "type": "alert",
+    "subject": "Gridwatch Alert: Audit Test High Risk Rule on CASE30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:46:40Z"
+  },
+  {
+    "id": "msg_1791974796_32aa7c",
+    "type": "alert",
+    "subject": "Test Outbox Verification Dispatch",
+    "recipients": [
+      "test_audit@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:46:36Z"
+  },
+  {
+    "id": "msg_1791974567_a67d2c",
+    "type": "alert",
+    "subject": "Gridwatch Alert: Audit Test High Risk Rule on CASE30",
+    "recipients": [
+      "cooldown_test@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:42:47Z"
+  },
+  {
+    "id": "msg_1791974562_7a4a94",
+    "type": "alert",
+    "subject": "Test Outbox Verification Dispatch",
+    "recipients": [
+      "test_audit@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:42:42Z"
+  },
+  {
+    "id": "msg_1791973751_54691a",
+    "type": "digest",
+    "subject": "Gridwatch Periodic Digest // CASE30 Operational Summary",
+    "recipients": [
+      "operator@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:29:11Z"
+  },
+  {
+    "id": "msg_1791973743_233167",
+    "type": "test",
+    "subject": "Gridwatch Test Dispatch // Verification Notice",
+    "recipients": [
+      "operator@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:29:03Z"
+  },
+  {
+    "id": "msg_1791973659_46857d",
+    "type": "alert",
+    "subject": "Gridwatch Alert: Alert on High N-1 Cascade Risk (\u226550%) on CASE30",
+    "recipients": [
+      "operator@gridwatch.local"
+    ],
+    "status": "outbox_saved",
+    "timestamp": "2026-10-14T10:27:39Z"
+  }
+]

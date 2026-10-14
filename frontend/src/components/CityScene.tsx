@@ -427,10 +427,12 @@ const CableBranch: React.FC<{
   loading: number;
   isOutaged: boolean;
   isHovered: boolean;
-  detailLevel?: 'low' | 'high';
   isNewlyTripped?: boolean;
   isPreviouslyTripped?: boolean;
   isOverloaded?: boolean;
+  detailLevel?: 'low' | 'high';
+  showMaintenanceOverlay?: boolean;
+  maintenancePriorityMap?: Record<number, { priority: number; color: string; urgency: string }> | null;
   onClick: (shiftKey: boolean) => void;
   onPointerOver: (e: any) => void;
   onPointerOut: () => void;
@@ -445,6 +447,8 @@ const CableBranch: React.FC<{
   isNewlyTripped = false,
   isPreviouslyTripped = false,
   isOverloaded = false,
+  showMaintenanceOverlay = false,
+  maintenancePriorityMap,
   onClick,
   onPointerOver,
   onPointerOut
@@ -460,6 +464,8 @@ const CableBranch: React.FC<{
     ? new THREE.Color('#6b7280')
     : isOutaged
     ? C_CABLE_OUT.clone()
+    : showMaintenanceOverlay && maintenancePriorityMap && maintenancePriorityMap[branch.id] !== undefined
+    ? new THREE.Color(maintenancePriorityMap[branch.id].color)
     : isOverloaded || loading >= 100
     ? C_CABLE_OV.clone()
     : loading >= 65
@@ -734,6 +740,8 @@ interface SceneProps {
   newlyTrippedBranchIds?: Set<number>;
   previouslyTrippedBranchIds?: Set<number>;
   overloadedBranchIds?: Set<number>;
+  showMaintenanceOverlay?: boolean;
+  maintenancePriorityMap?: Record<number, { priority: number; color: string; urgency: string }> | null;
   framingCentroid?: [number, number, number] | null;
   reducedMotion?: boolean;
   onClickBranch: (br: Branch, isShift?: boolean) => void;
@@ -754,6 +762,8 @@ const CitySceneInner: React.FC<SceneProps> = ({
   newlyTrippedBranchIds,
   previouslyTrippedBranchIds,
   overloadedBranchIds,
+  showMaintenanceOverlay,
+  maintenancePriorityMap,
   framingCentroid,
   reducedMotion,
   onClickBranch, onHoverBranch, onClickBus, onHoverBus,
@@ -1013,6 +1023,8 @@ const CitySceneInner: React.FC<SceneProps> = ({
             isNewlyTripped={isNewlyTripped}
             isPreviouslyTripped={isPrevTripped}
             isOverloaded={isOverloaded}
+            showMaintenanceOverlay={showMaintenanceOverlay}
+            maintenancePriorityMap={maintenancePriorityMap}
             onClick={(isShift) => onClickBranch(br, isShift)}
             onPointerOver={e => onHoverBranch(br, e)}
             onPointerOut={() => onHoverBranch(null)}
@@ -1171,8 +1183,25 @@ export const CityScene: React.FC<CitySceneProps> = ({
     setBuildingsOpacity,
     applyToStructures,
     setApplyToStructures,
+    showMaintenanceOverlay,
+    maintenanceData,
   } = useGridStore();
   const r = Math.max(4, gridRadius);
+
+  // Compute maintenance priority map for City overlay
+  const maintenancePriorityMap = useMemo(() => {
+    if (!showMaintenanceOverlay || !maintenanceData?.priorities) return null;
+    const map: Record<number, { priority: number; color: string; urgency: string }> = {};
+    maintenanceData.priorities.forEach((p) => {
+      if (p.asset_id.startsWith('line_') || p.asset_id.startsWith('branch_')) {
+        const idNum = parseInt(p.asset_id.split('_')[1], 10);
+        if (!isNaN(idNum)) {
+          map[idNum] = { priority: p.priority_score, color: p.color, urgency: p.urgency };
+        }
+      }
+    });
+    return map;
+  }, [showMaintenanceOverlay, maintenanceData]);
 
   return (
     <div ref={canvasWrapperRef} className="relative w-full h-full bg-[#eef2f8]">
@@ -1260,6 +1289,8 @@ export const CityScene: React.FC<CitySceneProps> = ({
           newlyTrippedBranchIds={newlyTrippedBranchIds}
           previouslyTrippedBranchIds={previouslyTrippedBranchIds}
           overloadedBranchIds={overloadedBranchIds}
+          showMaintenanceOverlay={showMaintenanceOverlay}
+          maintenancePriorityMap={maintenancePriorityMap}
           framingCentroid={framingCentroid}
           reducedMotion={reducedMotion}
           onClickBranch={onClickBranch} onHoverBranch={onHoverBranch}

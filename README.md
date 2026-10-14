@@ -334,5 +334,95 @@ The user interface adheres strictly to the **Estate** architectural light theme,
 - **Structured Tool Rendering**: Formats tool outputs as interactive cards, before/after risk tables, and ranked mitigation countermeasures labeled `model estimate` vs `simulator verified`.
 - **Physical Verification**: One-click **"Verify in Simulator"** button that runs the physical cascade engine via `POST /mitigate?verify=true` and updates the card live.
 - **Bidirectional UI Actions**: Executes actions returned by the assistant (setting load sliders, tripping lines, switching tabs, enabling criticality overlays) with confirmation notifications.
+- **Notification & Alerting Tools**: Supports agentic email dispatch (`send_report_email` with mandatory human confirmation) and watchlist rule creation (`create_alert_rule`).
+
+---
+
+## 🔧 Risk-Based Maintenance Prioritisation (Part 1)
+
+> [!IMPORTANT]
+> **Methodology Disclaimer**: Gridwatch uses **analytical risk-based prioritisation**, **NOT a learned remaining-useful-life (RUL) prediction model**, because no historical physical equipment failure event logs are available for standard benchmark grids. Equipment degradation and consequence are modeled transparently through physical loading stress and topological cascade impact.
+
+### 1. 24-Hour Daily Load Curve & Asset Metadata
+- **Load Profile**: A 24-hour configurable multiplier curve (default commercial/residential shape between $60\%$ and $120\%$, peaking at 12:00 and 19:00).
+- **Asset Table**: Each transmission branch and transformer tracks:
+  - `age_years` (float)
+  - `condition_score` ($0.0$ to $1.0$, where $1.0 = \text{excellent}$)
+  - `last_inspection_date` (`YYYY-MM-DD`)
+- **CSV Ingestion & Template**:
+  - Download template: `GET /maintenance/assets/template`
+  - Upload custom records: `POST /maintenance/assets/upload?grid_id={grid_id}`
+  - If no custom CSV is uploaded, deterministic simulated records are generated using a fixed pseudo-random seed per grid topology and explicitly labeled as **"Simulated asset data"** across the UI and API.
+
+### 2. Transparent Priority Formulation
+No black boxes—all scoring components are directly exposed in API responses:
+1. **Consequence ($C \in [0, 1]$)**: Predicted cascade failure probability if the asset trips under peak stress, re-using cached N-1 criticality analysis results.
+2. **Stress Metric ($S \in [0, 1]$)**: Calculated across the 24-hour load cycle:
+   $$\text{Stress} = 0.50 \times \min(1.0, \text{Peak Loading} / 120\%) + 0.30 \times (\text{Hours} > 100\% / 24) + 0.20 \times (\text{Hours} > 80\% / 24)$$
+3. **Likelihood ($L \in [0, 1]$)**:
+   $$\text{Likelihood} = 0.45 \times (1.0 - \text{Condition}) + 0.30 \times \min(1.0, \text{Age} / 40.0) + 0.25 \times \text{Stress}$$
+4. **Maintenance Priority Score ($P \in [0, 1]$)**:
+   $$\text{Priority} = \text{Likelihood} \times \text{Consequence}$$
+   - **Critical**: $P \ge 0.40$
+   - **High**: $0.20 \le P < 0.40$
+   - **Medium**: $0.08 \le P < 0.20$
+   - **Low**: $P < 0.08$
+
+### 3. Planned Outage Window Evaluation
+`POST /maintenance/planned-outage` simulates taking any asset offline for maintenance across each of the 24 hours of the daily load cycle:
+- Evaluates hourly cascade risk curve and identifies:
+  - **Safest Window**: Consecutive hours with lowest average system cascade risk (e.g., *"Safe between 02:00 and 05:00"*).
+  - **Avoid Window**: Peak stress hours (e.g., *"Avoid 18:00 to 21:00"*).
+- Runs physical cascade simulator verification on the optimal window and labels verdict as **"simulator verified"** or **"model estimate"**.
+
+---
+
+## 📧 Email Notifications & Outbox Demo Service (Part 2)
+
+Gridwatch includes an enterprise notification engine with strict security controls and an interactive local Outbox viewer for production-free testing.
+
+### 1. Gmail App Password Setup Guide
+To enable live email dispatch using a Google / Gmail account:
+1. **Enable 2-Step Verification**:
+   Navigate to [Google Account Security](https://myaccount.google.com/security) and turn on 2-Step Verification.
+2. **Generate an App Password**:
+   - Go to [Google App Passwords](https://myaccount.google.com/apppasswords).
+   - Enter `Gridwatch` as the app name and click **Create**.
+   - Copy the generated 16-character password (e.g., `abcd efgh ijkl mnop`).
+3. **Configure Environment Variables in `.env`**:
+   ```env
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=your_email@gmail.com
+   SMTP_PASSWORD=abcd efgh ijkl mnop
+   SMTP_FROM="Gridwatch Alerts <your_email@gmail.com>"
+   SMTP_TLS=true
+   APP_BASE_URL=http://localhost:5173
+   ```
+4. **Security Isolation**: Credentials remain strictly on the backend and are never sent to browser clients.
+
+### 2. Outbox Demo Mode
+If SMTP environment variables are not configured, Gridwatch automatically runs in **Outbox Demo Mode**:
+- Emails are rendered as complete Estate HTML and plaintext documents and saved to `data/outbox/{email_id}.json`.
+- The frontend displays a persistent **"Demo mode: emails are saved, not sent"** badge.
+- View and inspect all saved emails via `GET /notifications/outbox` or through the **Notifications Drawer** in the web app.
+
+### 3. Watchlist Alert Rules & Security Defense
+- **Rule Types**:
+  1. `risk_threshold`: Alerts when any N-1 contingency exceeds cascade probability threshold.
+  2. `system_load`: Alerts when aggregate grid loading exceeds rated threshold (e.g., $\ge 110\%$).
+  3. `saved_scenario`: Alerts when a specific saved contingency crosses an alert threshold.
+  4. `top_priority_asset`: Alerts when an asset enters Critical maintenance priority (score $\ge 0.40$).
+- **Cooldown & Limits**: Default 6-hour cooldown per rule to prevent alert fatigue; max 5 recipients per rule; max 10 emails/hour rate limit.
+- **Recipient Confirmation**: All email addresses must be explicitly confirmed in UI Settings before live transmission.
+- **Strict Injection Defense**:
+  - **CRLF Stripping**: Newline characters (`\r`, `\n`) are stripped from subjects and headers to prevent SMTP header injection attacks.
+  - **XSS Sanitization**: All untrusted strings (grid names, asset tags, scenario notes) are HTML-escaped.
+
+### 4. Background Scheduler & On-Demand Evaluation
+- An internal background evaluation runner monitors active rules periodically.
+- Operators can trigger an immediate check via `POST /notifications/run-check-now` or the **"Run Check Now"** button in the Notifications panel.
+- Full evaluation and dispatch history is recorded and accessible via `GET /notifications/history`.
+
 
 

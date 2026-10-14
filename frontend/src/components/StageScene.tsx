@@ -293,6 +293,8 @@ interface BranchNetworkProps {
   glowInfluentialBranchIds?: Set<number>;
   showCriticality?: boolean;
   branchCriticalityMap?: Record<number, number>;
+  showMaintenanceOverlay?: boolean;
+  maintenancePriorityMap?: Record<number, { priority: number; color: string; urgency: string }> | null;
   isBridgeMode?: boolean;
   bridgeBranchIds?: Set<number>;
   newlyTrippedBranchIds?: Set<number>;
@@ -313,6 +315,8 @@ const BranchNetwork: React.FC<BranchNetworkProps> = ({
   glowInfluentialBranchIds,
   showCriticality,
   branchCriticalityMap,
+  showMaintenanceOverlay,
+  maintenancePriorityMap,
   isBridgeMode,
   bridgeBranchIds,
   newlyTrippedBranchIds,
@@ -367,6 +371,8 @@ const BranchNetwork: React.FC<BranchNetworkProps> = ({
         c = COLOR_OUTAGED.clone();
       } else if (isBridgeMode && isBridge) {
         c = COLOR_BRIDGE.clone();
+      } else if (showMaintenanceOverlay && maintenancePriorityMap && maintenancePriorityMap[br.id] !== undefined) {
+        c = new THREE.Color(maintenancePriorityMap[br.id].color);
       } else if (showCriticality && branchCriticalityMap && branchCriticalityMap[br.id] !== undefined) {
         const critRisk = branchCriticalityMap[br.id];
         if (critRisk >= 0.7) c = COLOR_OVERLOADED.clone();
@@ -1206,6 +1212,8 @@ const AnimatedSceneGroup: React.FC<{
   influentialBranchIds: Set<number>;
   showCriticality: boolean;
   branchCriticalityMap: Record<number, number>;
+  showMaintenanceOverlay?: boolean;
+  maintenancePriorityMap?: Record<number, { priority: number; color: string; urgency: string }> | null;
   topologyOverlay: 'none' | 'degree' | 'betweenness' | 'community' | 'bridges';
   topologyData: any | null;
   bridgeBranchIds: Set<number>;
@@ -1281,6 +1289,8 @@ const AnimatedSceneGroup: React.FC<{
         glowInfluentialBranchIds={props.glowInfluential ? props.influentialBranchIds : undefined}
         showCriticality={props.showCriticality}
         branchCriticalityMap={props.branchCriticalityMap}
+        showMaintenanceOverlay={props.showMaintenanceOverlay}
+        maintenancePriorityMap={props.maintenancePriorityMap}
         isBridgeMode={props.topologyOverlay === 'bridges'}
         bridgeBranchIds={props.bridgeBranchIds}
         newlyTrippedBranchIds={props.newlyTrippedBranchIds}
@@ -1360,11 +1370,28 @@ export const StageScene: React.FC<StageSceneProps> = ({ isFullscreen = false }) 
     setGroupByVoltage,
     labelMode,
     setLabelMode,
+    showMaintenanceOverlay,
+    maintenanceData,
   } = useGridStore();
 
   const [hoveredBranch, setHoveredBranch] = useState<Branch | null>(null);
   const [hoveredBus, setHoveredBus] = useState<Bus | null>(null);
   const [tooltip, setTooltip] = useState<TooltipInfo | null>(null);
+
+  // Compute maintenance priority map for overlay
+  const maintenancePriorityMap = useMemo(() => {
+    if (!showMaintenanceOverlay || !maintenanceData?.priorities) return null;
+    const map: Record<number, { priority: number; color: string; urgency: string }> = {};
+    maintenanceData.priorities.forEach((p) => {
+      if (p.asset_id.startsWith('line_') || p.asset_id.startsWith('branch_')) {
+        const idNum = parseInt(p.asset_id.split('_')[1], 10);
+        if (!isNaN(idNum)) {
+          map[idNum] = { priority: p.priority_score, color: p.color, urgency: p.urgency };
+        }
+      }
+    });
+    return map;
+  }, [showMaintenanceOverlay, maintenanceData]);
 
   // Fetch topology on mount or grid change
   useEffect(() => {
@@ -1929,6 +1956,8 @@ export const StageScene: React.FC<StageSceneProps> = ({ isFullscreen = false }) 
             influentialBranchIds={influentialBranchIds}
             showCriticality={showCriticality}
             branchCriticalityMap={branchCriticalityMap}
+            showMaintenanceOverlay={showMaintenanceOverlay}
+            maintenancePriorityMap={maintenancePriorityMap}
             topologyOverlay={topologyOverlay}
             topologyData={topologyData}
             bridgeBranchIds={bridgeBranchIds}

@@ -17,7 +17,12 @@ import type {
   MitigateResponse,
   ChatMessage,
   SuggestedFix,
-  DatasetSplitsResponse
+  DatasetSplitsResponse,
+  MaintenancePriorityResponse,
+  PlannedOutageResponse,
+  NotificationRule,
+  NotificationSettings,
+  OutboxEmail
 } from './types';
 
 // Single source of truth for backend API base URL
@@ -28,6 +33,14 @@ let currentPredictController: AbortController | null = null;
 let currentPredictKey = '';
 let currentReplayController: AbortController | null = null;
 let currentReplayKey = '';
+
+// Default 24-hour typical load profile multiplier curve (60% to 120%)
+export const DEFAULT_24H_LOAD_PROFILE = [
+  0.68, 0.64, 0.61, 0.60, 0.63, 0.72,
+  0.86, 0.98, 1.05, 1.08, 1.10, 1.12,
+  1.14, 1.12, 1.10, 1.12, 1.18, 1.20,
+  1.17, 1.12, 1.04, 0.94, 0.82, 0.73
+];
 
 interface GridState {
   gridCase: string;
@@ -78,9 +91,46 @@ interface GridState {
   resultsData: ResultsResponse | null;
   loadingResults: boolean;
 
-  // Tabs state: Warning (default), Why, Stats, Data
-  activeTab: 'warning' | 'why' | 'stats' | 'data';
-  setActiveTab: (tab: 'warning' | 'why' | 'stats' | 'data') => void;
+  // Tabs state: Warning (default), Why, Stats, Data, Maintenance
+  activeTab: 'warning' | 'why' | 'stats' | 'data' | 'maintenance';
+  setActiveTab: (tab: 'warning' | 'why' | 'stats' | 'data' | 'maintenance') => void;
+
+  // Maintenance Prioritisation & Planned Outage State
+  maintenanceData: MaintenancePriorityResponse | null;
+  loadingMaintenance: boolean;
+  maintenanceError: string | null;
+  maintenanceLoadProfile: number[];
+  setMaintenanceLoadProfile: (profile: number[]) => void;
+  selectedMaintenanceAsset: string | null;
+  setSelectedMaintenanceAsset: (id: string | null) => void;
+  plannedOutageResult: PlannedOutageResponse | null;
+  loadingPlannedOutage: boolean;
+  plannedOutageError: string | null;
+  showMaintenanceOverlay: boolean;
+  toggleMaintenanceOverlay: () => void;
+  fetchMaintenancePriorities: (customProfile?: number[]) => Promise<void>;
+  evaluatePlannedOutage: (assetId: string, customProfile?: number[]) => Promise<void>;
+  uploadAssetCsv: (file: File) => Promise<{ status: string; count?: number; message?: string }>;
+
+  // Notifications Drawer & Outbox State
+  notificationsOpen: boolean;
+  setNotificationsOpen: (open: boolean) => void;
+  toggleNotifications: () => void;
+  notificationSettings: NotificationSettings | null;
+  notificationRules: NotificationRule[];
+  outboxEmails: OutboxEmail[];
+  notificationHistory: any[];
+  loadingNotifications: boolean;
+  fetchNotificationSettings: () => Promise<void>;
+  fetchNotificationRules: () => Promise<void>;
+  createNotificationRule: (rule: Partial<NotificationRule>) => Promise<any>;
+  deleteNotificationRule: (id: string) => Promise<void>;
+  updateNotificationSettings: (settings: Partial<NotificationSettings>) => Promise<void>;
+  sendTestNotificationEmail: (recipient: string) => Promise<any>;
+  sendDigestNotificationEmail: (gridId?: string) => Promise<any>;
+  runNotificationCheckNow: () => Promise<any>;
+  fetchOutboxEmails: () => Promise<void>;
+  fetchNotificationHistory: () => Promise<void>;
 
   // View Mode: 3D vs Map vs City
   viewMode: '3d' | 'map' | 'city';
@@ -1364,6 +1414,265 @@ export const useGridStore = create<GridState>((set, get) => ({
     } catch (err) {
       console.error('Failed to load benchmark results:', err);
       set({ loadingResults: false });
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // Maintenance Prioritisation & Outage Planning Implementation
+  // ---------------------------------------------------------------------------
+  maintenanceData: null,
+  loadingMaintenance: false,
+  maintenanceError: null,
+  maintenanceLoadProfile: DEFAULT_24H_LOAD_PROFILE,
+  setMaintenanceLoadProfile: (profile: number[]) => set({ maintenanceLoadProfile: profile }),
+  selectedMaintenanceAsset: null,
+  setSelectedMaintenanceAsset: (id: string | null) => set({ selectedMaintenanceAsset: id }),
+  plannedOutageResult: null,
+  loadingPlannedOutage: false,
+  plannedOutageError: null,
+  showMaintenanceOverlay: false,
+  toggleMaintenanceOverlay: () => set((s) => ({ showMaintenanceOverlay: !s.showMaintenanceOverlay })),
+
+  fetchMaintenancePriorities: async (customProfile?: number[]) => {
+    const { gridCase, maintenanceLoadProfile } = get();
+    const profile = customProfile || maintenanceLoadProfile;
+    set({ loadingMaintenance: true, maintenanceError: null });
+    try {
+      const res = await fetch(`${API_BASE}/maintenance/priority`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grid_id: gridCase, load_profile: profile })
+      });
+      if (!res.ok) {
+        throw new Error(`Server returned status ${res.status}`);
+      }
+      const data: MaintenancePriorityResponse = await res.json();
+      set((state) => ({
+        maintenanceData: data,
+        loadingMaintenance: false,
+        maintenanceError: null,
+        selectedMaintenanceAsset: state.selectedMaintenanceAsset || (data.priorities[0]?.asset_id ?? null)
+      }));
+
+      // Automatically evaluate planned outage for top asset if not yet evaluated
+      const targetAsset = get().selectedMaintenanceAsset || data.priorities[0]?.asset_id;
+      if (targetAsset) {
+        get().evaluatePlannedOutage(targetAsset, profile);
+      }
+    } catch (err: any) {
+      set({
+        loadingMaintenance: false,
+        maintenanceError: err.message || 'Failed to compute maintenance priorities'
+      });
+    }
+  },
+
+  evaluatePlannedOutage: async (assetId: string, customProfile?: number[]) => {
+    const { gridCase, maintenanceLoadProfile } = get();
+    const profile = customProfile || maintenanceLoadProfile;
+    set({ loadingPlannedOutage: true, plannedOutageError: null, selectedMaintenanceAsset: assetId });
+    try {
+      const res = await fetch(`${API_BASE}/maintenance/planned-outage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grid_id: gridCase, asset_id: assetId, load_profile: profile })
+      });
+      if (!res.ok) {
+        throw new Error(`Outage evaluation failed with status ${res.status}`);
+      }
+      const data: PlannedOutageResponse = await res.json();
+      set({
+        plannedOutageResult: data,
+        loadingPlannedOutage: false,
+        plannedOutageError: null
+      });
+    } catch (err: any) {
+      set({
+        loadingPlannedOutage: false,
+        plannedOutageError: err.message || 'Failed to evaluate planned outage'
+      });
+    }
+  },
+
+  uploadAssetCsv: async (file: File) => {
+    const { gridCase } = get();
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${API_BASE}/maintenance/assets/upload?grid_id=${gridCase}`, {
+      method: 'POST',
+      body: formData
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Upload failed' }));
+      throw new Error(err.detail || 'Asset upload failed');
+    }
+    const data = await res.json();
+    await get().fetchMaintenancePriorities();
+    return data;
+  },
+
+  // ---------------------------------------------------------------------------
+  // Notifications & Outbox Implementation
+  // ---------------------------------------------------------------------------
+  notificationsOpen: false,
+  setNotificationsOpen: (open: boolean) => set({ notificationsOpen: open }),
+  toggleNotifications: () => set((s) => ({ notificationsOpen: !s.notificationsOpen })),
+  notificationSettings: null,
+  notificationRules: [],
+  outboxEmails: [],
+  notificationHistory: [],
+  loadingNotifications: false,
+
+  fetchNotificationSettings: async () => {
+    try {
+      const res = await fetch(`${API_BASE}/notifications/settings`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ notificationSettings: data });
+      }
+    } catch (err) {
+      console.error('Failed to fetch notification settings:', err);
+    }
+  },
+
+  fetchNotificationRules: async () => {
+    try {
+      const res = await fetch(`${API_BASE}/notifications/rules`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ notificationRules: data.rules || [] });
+      }
+    } catch (err) {
+      console.error('Failed to fetch notification rules:', err);
+    }
+  },
+
+  createNotificationRule: async (rule: Partial<NotificationRule>) => {
+    set({ loadingNotifications: true });
+    try {
+      const res = await fetch(`${API_BASE}/notifications/rules`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rule)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to create rule' }));
+        throw new Error(err.detail || 'Rule creation failed');
+      }
+      const newRule = await res.json();
+      await get().fetchNotificationRules();
+      set({ loadingNotifications: false });
+      return newRule;
+    } catch (err: any) {
+      set({ loadingNotifications: false });
+      throw err;
+    }
+  },
+
+  deleteNotificationRule: async (id: string) => {
+    try {
+      await fetch(`${API_BASE}/notifications/rules/${id}`, { method: 'DELETE' });
+      await get().fetchNotificationRules();
+    } catch (err) {
+      console.error('Failed to delete rule:', err);
+    }
+  },
+
+  updateNotificationSettings: async (settings: Partial<NotificationSettings>) => {
+    try {
+      const res = await fetch(`${API_BASE}/notifications/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        set({ notificationSettings: data });
+      }
+    } catch (err) {
+      console.error('Failed to update notification settings:', err);
+    }
+  },
+
+  sendTestNotificationEmail: async (recipient: string) => {
+    set({ loadingNotifications: true });
+    try {
+      const res = await fetch(`${API_BASE}/notifications/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient })
+      });
+      const data = await res.json();
+      await get().fetchOutboxEmails();
+      await get().fetchNotificationHistory();
+      set({ loadingNotifications: false });
+      return data;
+    } catch (err: any) {
+      set({ loadingNotifications: false });
+      throw err;
+    }
+  },
+
+  sendDigestNotificationEmail: async (gridId?: string) => {
+    const { gridCase } = get();
+    set({ loadingNotifications: true });
+    try {
+      const res = await fetch(`${API_BASE}/notifications/digest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grid_id: gridId || gridCase })
+      });
+      const data = await res.json();
+      await get().fetchOutboxEmails();
+      await get().fetchNotificationHistory();
+      set({ loadingNotifications: false });
+      return data;
+    } catch (err: any) {
+      set({ loadingNotifications: false });
+      throw err;
+    }
+  },
+
+  runNotificationCheckNow: async () => {
+    set({ loadingNotifications: true });
+    try {
+      const res = await fetch(`${API_BASE}/notifications/run-check-now`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const data = await res.json();
+      await get().fetchOutboxEmails();
+      await get().fetchNotificationHistory();
+      set({ loadingNotifications: false });
+      return data;
+    } catch (err: any) {
+      set({ loadingNotifications: false });
+      throw err;
+    }
+  },
+
+  fetchOutboxEmails: async () => {
+    try {
+      const res = await fetch(`${API_BASE}/notifications/outbox`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ outboxEmails: data.emails || [] });
+      }
+    } catch (err) {
+      console.error('Failed to fetch outbox emails:', err);
+    }
+  },
+
+  fetchNotificationHistory: async () => {
+    try {
+      const res = await fetch(`${API_BASE}/notifications/history`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ notificationHistory: data.history || [] });
+      }
+    } catch (err) {
+      console.error('Failed to fetch notification history:', err);
     }
   }
 }));
